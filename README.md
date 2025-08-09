@@ -9,7 +9,7 @@ The system consists of four main components:
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │     Ollama      │    │     Chroma      │    │  Spring Boot    │    │   User Query    │
-│   (LLM + Embed)│    │  (Vector Store) │    │     Service     │    │   Interface     │
+│   (LLM + Embed) │    │  (Vector Store) │    │     Service     │    │   Interface     │
 │   Port 11434    │    │   Port 8000     │    │   Port 8080     │    │                 │
 └─────────────────┘    └─────────────────┘    └─────────────────┘    └─────────────────┘
 ```
