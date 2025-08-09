@@ -5,6 +5,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.time.Duration;
 import java.util.*;
@@ -23,6 +24,15 @@ public class VectorStoreService {
 
     @Value("${external.chroma.timeout:10s}")
     private Duration timeout;
+
+    @Value("${external.chroma.tenant:default_tenant}")
+    private String tenant;
+
+    @Value("${external.chroma.database:default_database}")
+    private String database;
+
+    // Store the collection UUID for operations
+    private volatile String collectionId;
 
     private final WebClient webClient;
 
@@ -74,7 +84,7 @@ public class VectorStoreService {
 
     public static class QueryRequest {
         private List<List<Double>> query_embeddings;
-        private int n_results;
+        private Integer n_results;
         private Map<String, Object> where;
 
         public QueryRequest(List<List<Double>> queryEmbeddings, int nResults) {
@@ -85,8 +95,8 @@ public class VectorStoreService {
         // Getters and setters
         public List<List<Double>> getQuery_embeddings() { return query_embeddings; }
         public void setQuery_embeddings(List<List<Double>> query_embeddings) { this.query_embeddings = query_embeddings; }
-        public int getN_results() { return n_results; }
-        public void setN_results(int n_results) { this.n_results = n_results; }
+        public Integer getN_results() { return n_results; }
+        public void setN_results(Integer n_results) { this.n_results = n_results; }
         public Map<String, Object> getWhere() { return where; }
         public void setWhere(Map<String, Object> where) { this.where = where; }
     }
@@ -136,7 +146,7 @@ public class VectorStoreService {
      * Initialize collection if it doesn't exist
      */
     public CompletableFuture<Boolean> initializeCollection() {
-        logger.info("Initializing collection: {}", collectionName);
+        logger.info("Initializing collection: {} in tenant: {} database: {}", collectionName, tenant, database);
 
         // Check if collection exists first
         return checkCollectionExists()
@@ -155,49 +165,75 @@ public class VectorStoreService {
     }
 
     /**
-     * Check if collection exists
+     * Check if collection exists and get its UUID
      */
     private CompletableFuture<Boolean> checkCollectionExists() {
+        String collectionsUrl = String.format("%s/api/v2/tenants/%s/databases/%s/collections",
+                chromaBaseUrl, tenant, database);
+
+        logger.debug("Checking collections at: {}", collectionsUrl);
+
         return webClient.get()
-                .uri(chromaBaseUrl + "/api/v2/collections")
+                .uri(collectionsUrl)
                 .retrieve()
                 .bodyToMono(List.class)
                 .timeout(timeout)
                 .map(collections -> {
-                    return collections.stream()
-                            .anyMatch(col -> {
-                                if (col instanceof Map) {
-                                    Map<String, Object> colMap = (Map<String, Object>) col;
-                                    return collectionName.equals(colMap.get("name"));
-                                }
-                                return false;
-                            });
+                    for (Object col : collections) {
+                        if (col instanceof Map) {
+                            Map<String, Object> colMap = (Map<String, Object>) col;
+                            if (collectionName.equals(colMap.get("name"))) {
+                                // Store the collection UUID for later use
+                                this.collectionId = (String) colMap.get("id");
+                                logger.info("Found existing collection '{}' with UUID: {}", collectionName, collectionId);
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
                 })
                 .doOnSuccess(exists -> logger.debug("Collection {} exists: {}", collectionName, exists))
+                .onErrorReturn(false)
                 .toFuture();
     }
 
     /**
-     * Create new collection
+     * Create new collection and store its UUID
      */
     private CompletableFuture<Boolean> createCollection() {
-        logger.info("Creating new collection: {}", collectionName);
+        logger.info("Creating new collection: {} in tenant: {} database: {}", collectionName, tenant, database);
 
         Map<String, Object> metadata = new HashMap<>();
         metadata.put("description", "Java code repository analysis");
-        metadata.put("created_at", System.currentTimeMillis());
 
         CreateCollectionRequest request = new CreateCollectionRequest(collectionName, metadata);
 
+        String createCollectionUrl = String.format("%s/api/v2/tenants/%s/databases/%s/collections",
+                chromaBaseUrl, tenant, database);
+
+        logger.debug("Creating collection at: {}", createCollectionUrl);
+
         return webClient.post()
-                .uri(chromaBaseUrl + "/api/v2/collections")
+                .uri(createCollectionUrl)
                 .bodyValue(request)
                 .retrieve()
                 .bodyToMono(Map.class)
                 .timeout(timeout)
-                .map(response -> true)
-                .doOnSuccess(success -> logger.info("Successfully created collection: {}", collectionName))
-                .doOnError(error -> logger.error("Failed to create collection {}: {}", collectionName, error.getMessage()))
+                .map(response -> {
+                    // Extract and store the collection UUID
+                    this.collectionId = (String) response.get("id");
+                    logger.info("Collection creation response: {}", response);
+                    logger.info("Created collection '{}' with UUID: {}", collectionName, collectionId);
+                    return true;
+                })
+                .doOnError(error -> {
+                    logger.error("Failed to create collection: {}", error.getMessage());
+                    if (error instanceof WebClientResponseException) {
+                        WebClientResponseException webError = (WebClientResponseException) error;
+                        logger.error("HTTP Status: {}, Response: {}", webError.getStatusCode(), webError.getResponseBodyAsString());
+                    }
+                })
+                .onErrorReturn(false)
                 .toFuture();
     }
 
@@ -250,6 +286,12 @@ public class VectorStoreService {
     }
 
     private CompletableFuture<Boolean> storeBatch(List<EmbeddingService.CodeEmbedding> batch) {
+        // Ensure we have a collection UUID
+        if (collectionId == null) {
+            logger.error("Collection UUID is null - cannot store embeddings");
+            return CompletableFuture.completedFuture(false);
+        }
+
         AddDocumentsRequest request = new AddDocumentsRequest();
 
         for (EmbeddingService.CodeEmbedding embedding : batch) {
@@ -259,15 +301,33 @@ public class VectorStoreService {
             request.getIds().add(embedding.getChunkId());
         }
 
+        // Use collection UUID instead of name
+        String addDocumentsUrl = String.format("%s/api/v2/tenants/%s/databases/%s/collections/%s/add",
+                chromaBaseUrl, tenant, database, collectionId);
+
+        // Add debug logging
+        logger.info("Storing batch of {} embeddings to collection UUID: {}", batch.size(), collectionId);
+        logger.debug("First embedding dimension: {}", request.getEmbeddings().get(0).size());
+        logger.debug("Request URL: {}", addDocumentsUrl);
+
         return webClient.post()
-                .uri(chromaBaseUrl + "/api/v2/collections/" + collectionName + "/add")
+                .uri(addDocumentsUrl)
                 .bodyValue(request)
                 .retrieve()
                 .bodyToMono(Map.class)
-                .timeout(timeout.multipliedBy(2)) // Longer timeout for batch operations
-                .map(response -> true)
+                .timeout(timeout.multipliedBy(2))
+                .map(response -> {
+                    logger.info("Chroma response: {}", response);
+                    return true;
+                })
                 .doOnSuccess(success -> logger.debug("Successfully stored batch of {} embeddings", batch.size()))
-                .doOnError(error -> logger.error("Failed to store embedding batch: {}", error.getMessage()))
+                .doOnError(error -> {
+                    logger.error("Failed to store embedding batch - Error details: {}", error.getMessage());
+                    if (error instanceof WebClientResponseException) {
+                        WebClientResponseException webError = (WebClientResponseException) error;
+                        logger.error("HTTP Status: {}, Response Body: {}", webError.getStatusCode(), webError.getResponseBodyAsString());
+                    }
+                })
                 .onErrorReturn(false)
                 .toFuture();
     }
@@ -285,13 +345,22 @@ public class VectorStoreService {
     public CompletableFuture<List<SearchResult>> searchSimilar(List<Double> queryEmbedding, int topK, Map<String, Object> filters) {
         logger.debug("Searching for {} similar chunks in collection: {}", topK, collectionName);
 
+        // Ensure we have a collection UUID
+        if (collectionId == null) {
+            logger.error("Collection UUID is null - cannot search");
+            return CompletableFuture.completedFuture(new ArrayList<>());
+        }
+
         QueryRequest request = new QueryRequest(List.of(queryEmbedding), topK);
         if (filters != null) {
             request.setWhere(filters);
         }
 
+        String queryUrl = String.format("%s/api/v2/tenants/%s/databases/%s/collections/%s/query",
+                chromaBaseUrl, tenant, database, collectionId);
+
         return webClient.post()
-                .uri(chromaBaseUrl + "/api/v2/collections/" + collectionName + "/query")
+                .uri(queryUrl)
                 .bodyValue(request)
                 .retrieve()
                 .bodyToMono(QueryResponse.class)
@@ -332,8 +401,16 @@ public class VectorStoreService {
      * Get collection statistics
      */
     public CompletableFuture<Map> getCollectionStats() {
+        if (collectionId == null) {
+            logger.warn("Collection UUID is null - cannot get stats");
+            return CompletableFuture.completedFuture(new HashMap<>());
+        }
+
+        String statsUrl = String.format("%s/api/v2/tenants/%s/databases/%s/collections/%s",
+                chromaBaseUrl, tenant, database, collectionId);
+
         return webClient.get()
-                .uri(chromaBaseUrl + "/api/v2/collections/" + collectionName)
+                .uri(statsUrl)
                 .retrieve()
                 .bodyToMono(Map.class)
                 .timeout(timeout)
@@ -349,8 +426,16 @@ public class VectorStoreService {
     public CompletableFuture<Boolean> deleteCollection() {
         logger.info("Deleting collection: {}", collectionName);
 
+        if (collectionId == null) {
+            logger.warn("Collection UUID is null - cannot delete");
+            return CompletableFuture.completedFuture(false);
+        }
+
+        String deleteUrl = String.format("%s/api/v2/tenants/%s/databases/%s/collections/%s",
+                chromaBaseUrl, tenant, database, collectionId);
+
         return webClient.delete()
-                .uri(chromaBaseUrl + "/api/v2/collections/" + collectionName)
+                .uri(deleteUrl)
                 .retrieve()
                 .bodyToMono(Map.class)
                 .timeout(timeout)
