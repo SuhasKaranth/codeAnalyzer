@@ -1,0 +1,56 @@
+plugins {
+	id 'java'
+	id 'org.springframework.boot' version '3.5.4'
+	id 'io.spring.dependency-management' version '1.1.7'
+}
+
+group = 'com.suhas'
+version = '0.0.1-SNAPSHOT'
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(17)
+	}
+}
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	// Core Spring Boot (already present)
+	implementation 'org.springframework.boot:spring-boot-starter-web'
+	implementation 'org.springframework.boot:spring-boot-starter-webflux'
+	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+
+	// Data & Persistence (already present)
+	runtimeOnly 'com.h2database:h2'
+
+	// Code Analysis Dependencies (NEW)
+	implementation 'com.github.javaparser:javaparser-core:3.25.4'
+	implementation 'com.github.javaparser:javaparser-symbol-solver-core:3.25.4'
+
+	// Git Operations (NEW)
+	implementation 'org.eclipse.jgit:org.eclipse.jgit:6.7.0.202309050840-r'
+
+	// JSON Processing (NEW - Spring Boot manages version)
+	implementation 'com.fasterxml.jackson.core:jackson-databind'
+
+	// Validation (NEW)
+	implementation 'org.springframework.boot:spring-boot-starter-validation'
+
+	// Async Processing & Caching (NEW)
+	implementation 'org.springframework.boot:spring-boot-starter-cache'
+
+	// Development Tools (NEW)
+	developmentOnly 'org.springframework.boot:spring-boot-devtools'
+
+	// Testing (already present)
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'
+	testImplementation 'io.projectreactor:reactor-test'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+}
