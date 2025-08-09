@@ -345,31 +345,63 @@ public class VectorStoreService {
     public CompletableFuture<List<SearchResult>> searchSimilar(List<Double> queryEmbedding, int topK, Map<String, Object> filters) {
         logger.debug("Searching for {} similar chunks in collection: {}", topK, collectionName);
 
-        // Ensure we have a collection UUID
-        if (collectionId == null) {
-            logger.error("Collection UUID is null - cannot search");
-            return CompletableFuture.completedFuture(new ArrayList<>());
+        // Ensure collection is initialized before searching
+        return ensureCollectionInitialized()
+                .thenCompose(initialized -> {
+                    if (!initialized) {
+                        logger.error("Failed to initialize collection for search");
+                        return CompletableFuture.completedFuture(new ArrayList<>());
+                    }
+
+                    if (collectionId == null) {
+                        logger.error("Collection UUID is null after initialization - cannot search");
+                        return CompletableFuture.completedFuture(new ArrayList<>());
+                    }
+
+                    QueryRequest request = new QueryRequest(List.of(queryEmbedding), topK);
+
+                    // FIX: Only set filters if they're not null AND not empty
+                    if (filters != null && !filters.isEmpty()) {
+                        request.setWhere(filters);
+                        logger.debug("Applying filters: {}", filters);
+                    } else {
+                        logger.debug("No filters applied - searching all documents");
+                    }
+
+                    String queryUrl = String.format("%s/api/v2/tenants/%s/databases/%s/collections/%s/query",
+                            chromaBaseUrl, tenant, database, collectionId);
+
+                    return webClient.post()
+                            .uri(queryUrl)
+                            .bodyValue(request)
+                            .retrieve()
+                            .bodyToMono(QueryResponse.class)
+                            .timeout(timeout)
+                            .map(this::convertToSearchResults)
+                            .doOnSuccess(results -> logger.debug("Found {} similar chunks", results.size()))
+                            .doOnError(error -> {
+                                logger.error("Failed to search similar chunks: {}", error.getMessage());
+                                if (error instanceof WebClientResponseException) {
+                                    WebClientResponseException webError = (WebClientResponseException) error;
+                                    logger.error("HTTP Status: {}, Response Body: {}", webError.getStatusCode(), webError.getResponseBodyAsString());
+                                }
+                            })
+                            .onErrorReturn(new ArrayList<>())
+                            .toFuture();
+                });
+    }
+
+    /**
+     * Ensure collection is initialized and UUID is available
+     */
+    private CompletableFuture<Boolean> ensureCollectionInitialized() {
+        if (collectionId != null) {
+            // Already initialized
+            return CompletableFuture.completedFuture(true);
         }
 
-        QueryRequest request = new QueryRequest(List.of(queryEmbedding), topK);
-        if (filters != null) {
-            request.setWhere(filters);
-        }
-
-        String queryUrl = String.format("%s/api/v2/tenants/%s/databases/%s/collections/%s/query",
-                chromaBaseUrl, tenant, database, collectionId);
-
-        return webClient.post()
-                .uri(queryUrl)
-                .bodyValue(request)
-                .retrieve()
-                .bodyToMono(QueryResponse.class)
-                .timeout(timeout)
-                .map(this::convertToSearchResults)
-                .doOnSuccess(results -> logger.debug("Found {} similar chunks", results.size()))
-                .doOnError(error -> logger.error("Failed to search similar chunks: {}", error.getMessage()))
-                .onErrorReturn(new ArrayList<>())
-                .toFuture();
+        logger.info("Collection UUID not available, initializing collection...");
+        return initializeCollection();
     }
 
     private List<SearchResult> convertToSearchResults(QueryResponse response) {
@@ -401,23 +433,26 @@ public class VectorStoreService {
      * Get collection statistics
      */
     public CompletableFuture<Map> getCollectionStats() {
-        if (collectionId == null) {
-            logger.warn("Collection UUID is null - cannot get stats");
-            return CompletableFuture.completedFuture(new HashMap<>());
-        }
+        return ensureCollectionInitialized()
+                .thenCompose(initialized -> {
+                    if (!initialized || collectionId == null) {
+                        logger.warn("Collection not initialized - cannot get stats");
+                        return CompletableFuture.completedFuture(new HashMap<>());
+                    }
 
-        String statsUrl = String.format("%s/api/v2/tenants/%s/databases/%s/collections/%s",
-                chromaBaseUrl, tenant, database, collectionId);
+                    String statsUrl = String.format("%s/api/v2/tenants/%s/databases/%s/collections/%s",
+                            chromaBaseUrl, tenant, database, collectionId);
 
-        return webClient.get()
-                .uri(statsUrl)
-                .retrieve()
-                .bodyToMono(Map.class)
-                .timeout(timeout)
-                .doOnSuccess(stats -> logger.debug("Retrieved collection stats: {}", stats))
-                .doOnError(error -> logger.error("Failed to get collection stats: {}", error.getMessage()))
-                .onErrorReturn(new HashMap<>())
-                .toFuture();
+                    return webClient.get()
+                            .uri(statsUrl)
+                            .retrieve()
+                            .bodyToMono(Map.class)
+                            .timeout(timeout)
+                            .doOnSuccess(stats -> logger.debug("Retrieved collection stats: {}", stats))
+                            .doOnError(error -> logger.error("Failed to get collection stats: {}", error.getMessage()))
+                            .onErrorReturn(new HashMap<>())
+                            .toFuture();
+                });
     }
 
     /**
