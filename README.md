@@ -292,7 +292,7 @@ src/
 
 ## 📄 License
 
-[Add your preferred license]
+To be updated!
 
 ---
 
