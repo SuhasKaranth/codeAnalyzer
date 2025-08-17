@@ -121,49 +121,62 @@ public class CodeAnalysisService {
         progress.setMessage("Starting repository analysis");
         analysisProgressMap.put(repoId, progress);
 
-        logger.info("Starting complete analysis for repository: {}", repositoryUrl);
+        logger.info("Starting complete analysis pipeline for repository: {} (ID: {})", repositoryUrl, repoId);
 
         return CompletableFuture.supplyAsync(() -> {
             try {
                 // Ensure vector store is ready
+                logger.info("Phase 1: Initializing vector store for repository: {}", repositoryUrl);
                 progress.setStatus(AnalysisStatus.INITIALIZING);
                 progress.setMessage("Initializing vector store");
                 vectorStoreService.initializeCollection().join();
+                logger.debug("Vector store initialization completed");
 
                 // Get repository status (should already be cloned)
+                logger.debug("Checking repository status for: {}", repositoryUrl);
                 RepositoryService.RepositoryStatus repoStatus = repositoryService.getRepositoryStatus(repositoryUrl);
                 if (repoStatus == null || repoStatus.getLocalPath() == null) {
+                    logger.error("Repository not found or not cloned: {}", repositoryUrl);
                     throw new RuntimeException("Repository not found or not cloned: " + repositoryUrl);
                 }
+                logger.debug("Repository found at local path: {}", repoStatus.getLocalPath());
 
                 // Step 1: Parse repository
+                logger.info("Phase 2: Parsing Java files for repository: {}", repositoryUrl);
                 progress.setStatus(AnalysisStatus.PARSING);
                 progress.setMessage("Parsing Java files");
                 List<CodeParserService.CodeChunk> codeChunks = codeParserService.parseRepository(repoStatus.getLocalPath());
 
                 progress.setTotalChunks(codeChunks.size());
                 progress.setMessage(String.format("Found %d code chunks", codeChunks.size()));
+                logger.info("Code parsing completed: {} chunks extracted", codeChunks.size());
 
                 if (codeChunks.isEmpty()) {
+                    logger.error("No Java code chunks found in repository: {}", repositoryUrl);
                     throw new RuntimeException("No Java code chunks found in repository");
                 }
 
                 // Step 2: Generate embeddings
+                logger.info("Phase 3: Generating embeddings for {} chunks from repository: {}", codeChunks.size(), repositoryUrl);
                 progress.setStatus(AnalysisStatus.GENERATING_EMBEDDINGS);
                 progress.setMessage("Generating embeddings");
                 List<EmbeddingService.CodeEmbedding> embeddings = embeddingService.generateEmbeddings(codeChunks).join();
 
                 progress.setProcessedChunks(embeddings.size());
                 progress.setMessage(String.format("Generated %d embeddings", embeddings.size()));
+                logger.info("Embedding generation completed: {}/{} successful embeddings", embeddings.size(), codeChunks.size());
 
                 // Step 3: Store in vector database
+                logger.info("Phase 4: Storing {} embeddings in vector database for repository: {}", embeddings.size(), repositoryUrl);
                 progress.setStatus(AnalysisStatus.STORING_VECTORS);
                 progress.setMessage("Storing embeddings in vector database");
                 boolean stored = vectorStoreService.storeEmbeddings(embeddings).join();
 
                 if (!stored) {
+                    logger.error("Failed to store embeddings in vector database for repository: {}", repositoryUrl);
                     throw new RuntimeException("Failed to store embeddings in vector database");
                 }
+                logger.info("Vector storage completed successfully for repository: {}", repositoryUrl);
 
                 // Complete
                 progress.setStatus(AnalysisStatus.COMPLETED);
@@ -179,8 +192,8 @@ public class CodeAnalysisService {
                 result.setProcessingTimeMs(progress.getDurationMs());
                 result.setChunksByType(calculateChunksByType(codeChunks));
 
-                logger.info("Successfully completed analysis for repository: {} in {}ms",
-                        repositoryUrl, result.getProcessingTimeMs());
+                logger.info("✅ Repository analysis completed successfully: {} ({} chunks → {} embeddings) in {}ms",
+                        repositoryUrl, result.getTotalChunks(), result.getStoredEmbeddings(), result.getProcessingTimeMs());
 
                 return result;
 
@@ -189,7 +202,8 @@ public class CodeAnalysisService {
                 progress.setError(e.getMessage());
                 progress.setEndTime(System.currentTimeMillis());
 
-                logger.error("Failed to analyze repository {}: {}", repositoryUrl, e.getMessage(), e);
+                logger.error("❌ Repository analysis failed for {} after {}ms: {}", 
+                        repositoryUrl, progress.getDurationMs(), e.getMessage(), e);
 
                 AnalysisResult result = new AnalysisResult();
                 result.setRepositoryUrl(repositoryUrl);
@@ -207,39 +221,54 @@ public class CodeAnalysisService {
      */
     public AnalysisProgress getAnalysisProgress(String repositoryUrl) {
         String repoId = generateRepositoryId(repositoryUrl);
-        return analysisProgressMap.get(repoId);
+        AnalysisProgress progress = analysisProgressMap.get(repoId);
+        logger.debug("Progress requested for repository {}: {}", repositoryUrl, 
+                progress != null ? progress.getStatus() : "NOT_FOUND");
+        return progress;
     }
 
     /**
      * Analyze specific Java files only
      */
     public CompletableFuture<AnalysisResult> analyzeSpecificFiles(String repositoryUrl, List<String> filePaths) {
+        logger.info("Starting specific file analysis for repository: {} ({} files)", repositoryUrl, filePaths.size());
         return CompletableFuture.supplyAsync(() -> {
             try {
                 RepositoryService.RepositoryStatus repoStatus = repositoryService.getRepositoryStatus(repositoryUrl);
                 if (repoStatus == null || repoStatus.getLocalPath() == null) {
+                    logger.error("Repository not found for specific file analysis: {}", repositoryUrl);
                     throw new RuntimeException("Repository not found: " + repositoryUrl);
                 }
+                logger.debug("Repository found at: {}", repoStatus.getLocalPath());
 
                 // Parse only specific files
+                logger.debug("Parsing {} specific files", filePaths.size());
                 List<CodeParserService.CodeChunk> codeChunks = new ArrayList<>();
+                int parsedFiles = 0;
                 for (String filePath : filePaths) {
                     try {
                         java.nio.file.Path fullPath = java.nio.file.Path.of(repoStatus.getLocalPath(), filePath);
                         List<CodeParserService.CodeChunk> fileChunks = codeParserService.parseJavaFile(fullPath, repoStatus.getLocalPath());
                         codeChunks.addAll(fileChunks);
+                        parsedFiles++;
+                        logger.debug("Successfully parsed file {}: {} chunks", filePath, fileChunks.size());
                     } catch (Exception e) {
                         logger.warn("Failed to parse file {}: {}", filePath, e.getMessage());
                     }
                 }
+                logger.info("File parsing completed: {}/{} files parsed, {} total chunks", parsedFiles, filePaths.size(), codeChunks.size());
 
                 if (codeChunks.isEmpty()) {
+                    logger.error("No code chunks extracted from specified files for repository: {}", repositoryUrl);
                     throw new RuntimeException("No code chunks extracted from specified files");
                 }
 
                 // Generate and store embeddings
+                logger.info("Generating embeddings for {} chunks from specific files", codeChunks.size());
                 List<EmbeddingService.CodeEmbedding> embeddings = embeddingService.generateEmbeddings(codeChunks).join();
+                logger.info("Generated {} embeddings, storing in vector database", embeddings.size());
                 vectorStoreService.storeEmbeddings(embeddings).join();
+                logger.info("Specific file analysis embedding storage completed");
 
                 AnalysisResult result = new AnalysisResult();
                 result.setRepositoryUrl(repositoryUrl);
@@ -248,10 +277,12 @@ public class CodeAnalysisService {
                 result.setStoredEmbeddings(embeddings.size());
                 result.setChunksByType(calculateChunksByType(codeChunks));
 
+                logger.info("✅ Specific file analysis completed: {} files → {} chunks → {} embeddings", 
+                        filePaths.size(), result.getTotalChunks(), result.getStoredEmbeddings());
                 return result;
 
             } catch (Exception e) {
-                logger.error("Failed to analyze specific files for {}: {}", repositoryUrl, e.getMessage());
+                logger.error("❌ Specific file analysis failed for repository {}: {}", repositoryUrl, e.getMessage(), e);
 
                 AnalysisResult result = new AnalysisResult();
                 result.setRepositoryUrl(repositoryUrl);
@@ -267,12 +298,15 @@ public class CodeAnalysisService {
      * Get analysis summary for all processed repositories
      */
     public Map<String, Object> getAnalysisSummary() {
+        logger.debug("Generating analysis summary");
         Map<String, Object> summary = new HashMap<>();
 
         // Get vector store stats
         try {
+            logger.debug("Retrieving vector store statistics");
             Map<String, Object> collectionStats = vectorStoreService.getCollectionStats().join();
             summary.put("vectorStore", collectionStats);
+            logger.debug("Vector store stats retrieved successfully");
         } catch (Exception e) {
             logger.warn("Failed to get vector store stats: {}", e.getMessage());
         }
@@ -295,6 +329,8 @@ public class CodeAnalysisService {
         summary.put("failedRepositories", failedRepositories);
         summary.put("inProgressRepositories", totalRepositories - completedRepositories - failedRepositories);
 
+        logger.info("Analysis summary generated: {} total repos ({} completed, {} failed, {} in progress)", 
+                totalRepositories, completedRepositories, failedRepositories, totalRepositories - completedRepositories - failedRepositories);
         return summary;
     }
 
@@ -302,15 +338,23 @@ public class CodeAnalysisService {
      * Check if services are healthy
      */
     public CompletableFuture<Map<String, Boolean>> healthCheck() {
+        logger.debug("Performing comprehensive health check of analysis services");
         CompletableFuture<Boolean> embeddingHealth = embeddingService.healthCheck();
         CompletableFuture<Boolean> vectorStoreHealth = vectorStoreService.healthCheck();
 
         return CompletableFuture.allOf(embeddingHealth, vectorStoreHealth)
                 .thenApply(v -> {
+                    boolean embeddingHealthy = embeddingHealth.join();
+                    boolean vectorStoreHealthy = vectorStoreHealth.join();
+                    boolean overallHealthy = embeddingHealthy && vectorStoreHealthy;
+                    
                     Map<String, Boolean> health = new HashMap<>();
-                    health.put("embeddingService", embeddingHealth.join());
-                    health.put("vectorStore", vectorStoreHealth.join());
-                    health.put("overall", embeddingHealth.join() && vectorStoreHealth.join());
+                    health.put("embeddingService", embeddingHealthy);
+                    health.put("vectorStore", vectorStoreHealthy);
+                    health.put("overall", overallHealthy);
+                    
+                    logger.info("Health check completed - Embedding: {}, VectorStore: {}, Overall: {}", 
+                            embeddingHealthy, vectorStoreHealthy, overallHealthy);
                     return health;
                 });
     }
@@ -326,6 +370,7 @@ public class CodeAnalysisService {
             counts.merge(chunk.getType(), 1, Integer::sum);
         }
 
+        logger.trace("Chunk type distribution: {}", counts);
         return counts;
     }
 

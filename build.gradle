@@ -42,6 +42,18 @@ dependencies {
 	// Async Processing & Caching (NEW)
 	implementation 'org.springframework.boot:spring-boot-starter-cache'
 
+	implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
+
+	// For JSON processing
+	implementation 'com.fasterxml.jackson.core:jackson-databind'
+	implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+
+	// For async support (likely already have this)
+	implementation 'org.springframework:spring-webmvc'
+
+	// For testing the chat functionality
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'
+
 	// Development Tools (NEW)
 	developmentOnly 'org.springframework.boot:spring-boot-devtools'
 

@@ -60,9 +60,11 @@ public class RepositoryService {
      */
     public CompletableFuture<String> cloneRepositoryAsync(String repoUrl) {
         String repoId = generateRepositoryId(repoUrl);
+        logger.info("Starting async clone for repository: {}", repoUrl);
 
         // Update status to cloning
         repositoryStatuses.put(repoId, new RepositoryStatus(ProcessingStatus.CLONING, "Starting clone process"));
+        logger.debug("Repository status updated to CLONING for: {}", repoUrl);
 
         return CompletableFuture.supplyAsync(() -> {
             try {
@@ -73,7 +75,7 @@ public class RepositoryService {
                 status.setMessage("Repository cloned successfully");
                 status.setLocalPath(localPath);
 
-                logger.info("Repository cloned successfully: {} -> {}", repoUrl, localPath);
+                logger.info("Async repository clone completed successfully: {} -> {}", repoUrl, localPath);
                 return localPath;
 
             } catch (Exception e) {
@@ -91,7 +93,9 @@ public class RepositoryService {
      * Clone repository synchronously
      */
     public String cloneRepository(String repoUrl) throws GitAPIException, IOException {
+        logger.info("Starting synchronous clone for repository: {}", repoUrl);
         validateRepositoryUrl(repoUrl);
+        logger.debug("Repository URL validation passed for: {}", repoUrl);
 
         // Create workspace directory if it doesn't exist
         Path workspacePath = Paths.get(workspaceDirectory);
@@ -112,9 +116,11 @@ public class RepositoryService {
         }
 
         logger.info("Cloning repository {} to {}", repoUrl, targetPath.toAbsolutePath());
+        logger.debug("Generated unique directory name: {}", targetDirName);
 
         try {
             // Clone the repository
+            logger.debug("Initiating Git clone operation for: {}", repoUrl);
             Git git = Git.cloneRepository()
                     .setURI(repoUrl)
                     .setDirectory(targetPath.toFile())
@@ -122,6 +128,7 @@ public class RepositoryService {
                     .call();
 
             git.close();
+            logger.debug("Git repository clone completed, connection closed for: {}", repoUrl);
 
             // Add this line in cloneRepository method, just before the return statement
             RepositoryStatus status = new RepositoryStatus(ProcessingStatus.COMPLETED, "Repository cloned successfully");
@@ -132,8 +139,10 @@ public class RepositoryService {
             return targetPath.toAbsolutePath().toString();
 
         } catch (GitAPIException e) {
+            logger.error("Git clone operation failed for repository: {}", repoUrl, e);
             // Clean up on failure
             if (Files.exists(targetPath)) {
+                logger.debug("Cleaning up failed clone directory: {}", targetPath);
                 deleteDirectory(targetPath);
             }
             throw e;
@@ -152,18 +161,28 @@ public class RepositoryService {
      * List all Java files in the cloned repository
      */
     public java.util.List<Path> listJavaFiles(String localRepoPath) throws IOException {
+        logger.debug("Scanning for Java files in repository: {}", localRepoPath);
         Path repoPath = Paths.get(localRepoPath);
 
         if (!Files.exists(repoPath)) {
             throw new IllegalArgumentException("Repository path does not exist: " + localRepoPath);
         }
 
+
+        logger.info("Found {} Java files in repository: {}", Files.walk(repoPath)
+                .filter(Files::isRegularFile)
+                .filter(path -> path.toString().endsWith(".java"))
+                .filter(path -> !path.toString().contains("/.git/"))
+                .filter(path -> !path.toString().contains("/target/"))
+                .filter(path -> !path.toString().contains("/build/"))
+                .count(), localRepoPath);
+
         return Files.walk(repoPath)
                 .filter(Files::isRegularFile)
                 .filter(path -> path.toString().endsWith(".java"))
-                .filter(path -> !path.toString().contains("/.git/")) // Exclude .git directory
-                .filter(path -> !path.toString().contains("/target/")) // Exclude Maven target
-                .filter(path -> !path.toString().contains("/build/")) // Exclude Gradle build
+                .filter(path -> !path.toString().contains("/.git/"))
+                .filter(path -> !path.toString().contains("/target/"))
+                .filter(path -> !path.toString().contains("/build/"))
                 .sorted()
                 .toList();
     }
@@ -190,6 +209,7 @@ public class RepositoryService {
      * Get repository statistics
      */
     public RepositoryStats getRepositoryStats(String localRepoPath) throws IOException {
+        logger.debug("Calculating repository statistics for: {}", localRepoPath);
         java.util.List<Path> javaFiles = listJavaFiles(localRepoPath);
 
         long totalLines = 0;
@@ -199,6 +219,7 @@ public class RepositoryService {
             totalLines += Files.lines(javaFile).count();
         }
 
+        logger.info("Repository statistics calculated - Files: {}, Lines: {}, Path: {}", totalFiles, totalLines, localRepoPath);
         return new RepositoryStats(totalFiles, totalLines, localRepoPath);
     }
 
