@@ -1,0 +1,751 @@
+openapi: 3.1.0
+info:
+  title: codeAnalyzer API
+  version: 1.0.0
+  description: >
+    Clone repositories, analyze Java code (parse → embed → store in Chroma),
+    query the indexed codebase, and interact via natural language chat agent.
+servers:
+  - url: http://localhost:8080
+paths:
+  /api/repository/clone:
+    post:
+      summary: Clone a repository (async)
+      parameters:
+        - in: query
+          name: url
+          required: true
+          schema: { type: string, format: uri }
+      responses:
+        "202":
+          description: Cloning started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  repositoryUrl: { type: string, format: uri }
+                  status: { type: string, example: CLONING }
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  message: { type: string }
+
+  /api/repository/clone-sync:
+    post:
+      summary: Clone a repository (sync)
+      parameters:
+        - in: query
+          name: url
+          required: true
+          schema: { type: string, format: uri }
+      responses:
+        "200":
+          description: Cloned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  repositoryUrl: { type: string, format: uri }
+                  localPath: { type: string }
+                  status: { type: string, example: COMPLETED }
+                  stats:
+                    type: object
+                    properties:
+                      javaFileCount: { type: integer }
+                      totalLines: { type: integer }
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  message: { type: string }
+
+  /api/repository/status:
+    get:
+      summary: Get repository status
+      parameters:
+        - in: query
+          name: url
+          required: true
+          schema: { type: string, format: uri }
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  repositoryUrl: { type: string, format: uri }
+                  status: { type: string }
+                  message: { type: string }
+                  timestamp: { type: integer, format: int64 }
+                  localPath: { type: string }
+                  stats:
+                    type: object
+                    properties:
+                      javaFileCount: { type: integer }
+                      totalLines: { type: integer }
+        "404":
+          description: Not found
+        "400":
+          description: Bad request
+
+  /api/repository/files:
+    get:
+      summary: List Java files
+      parameters:
+        - in: query
+          name: url
+          required: true
+          schema: { type: string, format: uri }
+      responses:
+        "200":
+          description: Java files
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  repositoryUrl: { type: string, format: uri }
+                  localPath: { type: string }
+                  javaFiles:
+                    type: array
+                    items: { type: string }
+                  fileCount: { type: integer }
+        "400":
+          description: Bad request
+
+  /api/repository/cleanup:
+    delete:
+      summary: Cleanup repository
+      parameters:
+        - in: query
+          name: url
+          required: true
+          schema: { type: string, format: uri }
+      responses:
+        "200":
+          description: Cleanup result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  repositoryUrl: { type: string, format: uri }
+                  cleaned: { type: boolean }
+                  message: { type: string }
+        "400":
+          description: Bad request
+
+  /api/analysis/start:
+    post:
+      summary: Start full analysis (async)
+      parameters:
+        - in: query
+          name: url
+          required: true
+          schema: { type: string, format: uri }
+      responses:
+        "202":
+          description: Analysis started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+                  repositoryUrl: { type: string, format: uri }
+                  status: { type: string, example: INITIALIZING }
+        "400":
+          description: Bad request
+
+  /api/analysis/progress:
+    get:
+      summary: Get analysis progress
+      parameters:
+        - in: query
+          name: url
+          required: true
+          schema: { type: string, format: uri }
+      responses:
+        "200":
+          description: Progress details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  repositoryUrl: { type: string, format: uri }
+                  status: { type: string }
+                  message: { type: string }
+                  progressPercentage: { type: number }
+                  totalChunks: { type: integer }
+                  processedChunks: { type: integer }
+                  durationMs: { type: integer, format: int64 }
+                  error: { type: string, nullable: true }
+        "400":
+          description: Bad request
+
+  /api/analysis/files:
+    post:
+      summary: Analyze specific files
+      parameters:
+        - in: query
+          name: url
+          required: true
+          schema: { type: string, format: uri }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { type: string, description: "Relative path to .java file" }
+      responses:
+        "200":
+          description: File analysis result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  repositoryUrl: { type: string, format: uri }
+                  analyzedFiles:
+                    type: array
+                    items: { type: string }
+                  status: { type: string }
+                  totalChunks: { type: integer }
+                  storedEmbeddings: { type: integer }
+                  processingTimeMs: { type: integer, format: int64 }
+                  chunksByType:
+                    type: object
+                    additionalProperties: { type: integer }
+                  errors:
+                    type: array
+                    items: { type: string }
+        "400":
+          description: Bad request
+
+  /api/analysis/summary:
+    get:
+      summary: Get analysis summary
+      responses:
+        "200":
+          description: Summary
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /api/analysis/health:
+    get:
+      summary: Health check (analysis + deps)
+      responses:
+        "200":
+          description: Healthy
+        "503":
+          description: Unhealthy
+
+  /api/query/search:
+    post:
+      summary: Semantic code search
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: { type: string }
+                maxResults: { type: integer, default: 5 }
+                includeCode: { type: boolean, default: true }
+                includeExplanation: { type: boolean, default: true }
+                filters:
+                  type: object
+                  additionalProperties: { oneOf: [{type: string},{type: integer},{type: boolean}] }
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  query: { type: string }
+                  totalMatches: { type: integer }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                  explanation: { type: string, nullable: true }
+        "500":
+          description: Error
+
+  /api/query/ask:
+    get:
+      summary: Ask a natural-language question
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Answer
+        "500":
+          description: Error
+
+  /api/query/type/{type}:
+    get:
+      summary: Find specific code elements by type
+      parameters:
+        - in: path
+          name: type
+          required: true
+          schema: { type: string, example: controller }
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, default: 10, minimum: 1 }
+      responses:
+        "200":
+          description: Matches
+        "500":
+          description: Error
+
+  /api/query/spring-components:
+    get:
+      summary: Find Spring components
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, default: 10, minimum: 1 }
+      responses:
+        "200":
+          description: Components
+        "500":
+          description: Error
+
+  /api/query/endpoints:
+    get:
+      summary: Discover API endpoints
+      responses:
+        "200":
+          description: Endpoints
+        "500":
+          description: Error
+
+  /api/query/business-logic:
+    post:
+      summary: Analyze business logic
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: { type: string }
+      responses:
+        "200":
+          description: Explanation
+        "500":
+          description: Error
+
+  /api/query/suggestions:
+    get:
+      summary: Get query suggestions
+      responses:
+        "200":
+          description: Suggestions
+
+  /api/query/stats:
+    get:
+      summary: Get search statistics
+      responses:
+        "200":
+          description: Stats
+        "500":
+          description: Error
+
+  /api/query/advanced:
+    post:
+      summary: Advanced search with filters
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: { type: string }
+                maxResults: { type: integer, default: 5 }
+                includeCode: { type: boolean, default: true }
+                includeExplanation: { type: boolean, default: true }
+                filters:
+                  type: object
+                  additionalProperties: { oneOf: [{type: string},{type: integer},{type: boolean}] }
+      responses:
+        "200":
+          description: Results
+        "500":
+          description: Error
+
+  /api/query/scope:
+    get:
+      summary: Scoped search (package/class)
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema: { type: string }
+        - in: query
+          name: scope
+          required: true
+          schema: { type: string, description: "Package (a.b.c) or ClassName" }
+      responses:
+        "200":
+          description: Scoped results
+        "500":
+          description: Error
+
+  # ================================
+  # NEW CHAT AGENT ENDPOINTS
+  # ================================
+
+  /api/chat/message:
+    post:
+      summary: Send a message to the chat agent
+      description: >
+        Natural language interface for code analysis. The agent can analyze repositories,
+        find endpoints, search code, and answer questions about the codebase.
+      tags:
+        - Chat Agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+                  description: Natural language message or question
+                  example: "Analyze https://github.com/spring-projects/spring-boot"
+                sessionId:
+                  type: string
+                  description: Session ID for conversation context (auto-generated if not provided)
+                  example: "chat_session_12345"
+      responses:
+        "200":
+          description: Chat response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  response:
+                    type: string
+                    description: Conversational response from the agent
+                    example: "I'll analyze the Spring Boot repository for you..."
+                  suggestions:
+                    type: array
+                    items:
+                      type: string
+                    description: Suggested follow-up questions or actions
+                    example: ["What REST endpoints does it have?", "Show me the main components"]
+                  success:
+                    type: boolean
+                    description: Whether the operation was successful
+                    example: true
+                  sessionId:
+                    type: string
+                    description: Session ID for this conversation
+                    example: "chat_session_12345"
+                  metadata:
+                    type: object
+                    description: Additional metadata about the operation
+                    properties:
+                      actionExecuted:
+                        type: string
+                        description: The action that was performed
+                        example: "ANALYZE_REPO"
+                      actionSuccess:
+                        type: boolean
+                        description: Whether the action succeeded
+                        example: true
+                      dataAvailable:
+                        type: boolean
+                        description: Whether additional data is available
+                        example: true
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  response:
+                    type: string
+                    example: "I'm having trouble processing your request. Please try again."
+                  success:
+                    type: boolean
+                    example: false
+                  sessionId:
+                    type: string
+
+  /api/chat/session/{sessionId}/context:
+    get:
+      summary: Get conversation context for a session
+      description: Retrieve the conversation history and context for a specific chat session
+      tags:
+        - Chat Agent
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema:
+            type: string
+          description: The session ID to get context for
+          example: "chat_session_12345"
+      responses:
+        "200":
+          description: Session context
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessionId:
+                    type: string
+                    example: "chat_session_12345"
+                  currentRepository:
+                    type: string
+                    nullable: true
+                    description: Currently analyzed repository URL
+                    example: "https://github.com/spring-projects/spring-boot"
+                  currentRepositoryId:
+                    type: string
+                    nullable: true
+                    description: Internal repository identifier
+                    example: "spring-projects_spring-boot"
+                  recentExchanges:
+                    type: array
+                    description: Recent conversation exchanges (max 5)
+                    items:
+                      type: object
+                      properties:
+                        userMessage:
+                          type: string
+                          example: "What endpoints does this have?"
+                        assistantResponse:
+                          type: string
+                          example: "I found 15 REST endpoints..."
+                        timestamp:
+                          type: string
+                          format: date-time
+                          example: "2024-01-15T10:30:00Z"
+                  lastActivity:
+                    type: string
+                    format: date-time
+                    description: Last activity timestamp
+                    example: "2024-01-15T10:35:00Z"
+                  sessionData:
+                    type: object
+                    description: Additional session-specific data
+                    additionalProperties: true
+        "404":
+          description: Session not found
+        "500":
+          description: Server error
+
+  /api/chat/session/new:
+    post:
+      summary: Create a new chat session
+      description: Generate a new session ID for starting a conversation
+      tags:
+        - Chat Agent
+      responses:
+        "200":
+          description: New session created
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "chat_session_1705312200000"
+
+  /api/chat/health:
+    get:
+      summary: Chat agent health check
+      description: Check if the chat agent and its dependencies are working
+      tags:
+        - Chat Agent
+      responses:
+        "200":
+          description: Chat agent is healthy
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "Chat service is running"
+        "503":
+          description: Chat agent is unhealthy
+
+  /api/chat/test/ollama:
+    get:
+      summary: Test Ollama connection
+      description: Test connection to the Ollama LLM service
+      tags:
+        - Chat Agent
+        - Testing
+      responses:
+        "200":
+          description: Ollama connection test result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [connected, error]
+                    example: "connected"
+                  response:
+                    type: string
+                    description: Response from Ollama service
+                  message:
+                    type: string
+                    description: Error message if connection failed
+
+  /api/chat/test/services:
+    get:
+      summary: Test service availability
+      description: Test availability of chat agent and related services
+      tags:
+        - Chat Agent
+        - Testing
+      responses:
+        "200":
+          description: Service availability status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  chat:
+                    type: string
+                    example: "available"
+                  codeAnalysis:
+                    type: string
+                    example: "available"
+                  vectorStore:
+                    type: string
+                    example: "available"
+
+# ================================
+# COMPONENTS SECTION
+# ================================
+
+components:
+  schemas:
+    ChatRequest:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          description: Natural language message or question
+          minLength: 1
+          maxLength: 1000
+          example: "Analyze https://github.com/spring-projects/spring-boot"
+        sessionId:
+          type: string
+          description: Session ID for conversation context
+          pattern: '^[a-zA-Z0-9_-]+
+          example: "chat_session_12345"
+
+    ChatResponse:
+      type: object
+      properties:
+        response:
+          type: string
+          description: Conversational response from the agent
+        suggestions:
+          type: array
+          items:
+            type: string
+          description: Suggested follow-up questions or actions
+        success:
+          type: boolean
+          description: Whether the operation was successful
+        sessionId:
+          type: string
+          description: Session ID for this conversation
+        metadata:
+          type: object
+          description: Additional metadata about the operation
+          additionalProperties: true
+
+    ConversationContext:
+      type: object
+      properties:
+        sessionId:
+          type: string
+        currentRepository:
+          type: string
+          nullable: true
+        currentRepositoryId:
+          type: string
+          nullable: true
+        recentExchanges:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatExchange'
+        lastActivity:
+          type: string
+          format: date-time
+        sessionData:
+          type: object
+          additionalProperties: true
+
+    ChatExchange:
+      type: object
+      properties:
+        userMessage:
+          type: string
+        assistantResponse:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+tags:
+  - name: Repository Management
+    description: Operations for cloning and managing repositories
+  - name: Code Analysis
+    description: Operations for analyzing and processing code
+  - name: Query & Search
+    description: Operations for searching and querying analyzed code
+  - name: Chat Agent
+    description: Natural language interface for code analysis
+  - name: Testing
+    description: Testing and health check endpoints

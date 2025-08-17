@@ -121,47 +121,67 @@ public class QueryService {
     public CompletableFuture<QueryResponse> searchCode(QueryRequest request) {
         long startTime = System.currentTimeMillis();
 
-        logger.info("Processing query: {}", request.getQuery());
+        logger.info("Processing RAG query: '{}' (maxResults: {}, includeExplanation: {})", 
+            request.getQuery(), request.getMaxResults(), request.isIncludeExplanation());
+        if (request.getFilters() != null && !request.getFilters().isEmpty()) {
+            logger.debug("Query filters applied: {}", request.getFilters());
+        }
 
         return embeddingService.generateQueryEmbedding(request.getQuery())
                 .thenCompose(queryEmbedding -> {
                     if (queryEmbedding.isEmpty()) {
+                        logger.error("Failed to generate query embedding for: '{}'", request.getQuery());
                         throw new RuntimeException("Failed to generate query embedding");
                     }
-
+                    
+                    logger.debug("Query embedding generated (dimension: {}), searching vector store", queryEmbedding.size());
                     // Search for similar code
                     return vectorStoreService.searchSimilar(queryEmbedding, request.getMaxResults(), request.getFilters());
                 })
                 .thenCompose(searchResults -> {
                     // Convert search results to CodeMatch objects
+                    logger.info("Vector search returned {} results, converting to CodeMatch objects", searchResults.size());
                     List<CodeMatch> matches = convertSearchResults(searchResults);
 
                     QueryResponse response = new QueryResponse();
                     response.setQuery(request.getQuery());
                     response.setMatches(matches);
                     response.setTotalMatches(matches.size());
+                    
+                    if (!matches.isEmpty()) {
+                        logger.debug("Best match similarity: {:.3f}, type: {}, class: {}", 
+                            matches.get(0).getSimilarity(), matches.get(0).getType(), matches.get(0).getClassName());
+                    }
 
                     if (request.isIncludeExplanation() && !matches.isEmpty()) {
                         // Generate explanation using LLM
+                        logger.info("Generating LLM explanation for {} code matches", matches.size());
                         String codeContext = buildCodeContext(matches);
+                        logger.debug("Code context length: {} characters", codeContext.length());
                         return llmService.generateCodeAnalysisResponse(request.getQuery(), codeContext)
                                 .thenApply(explanation -> {
+                                    logger.info("LLM explanation generated (length: {} chars)", explanation.length());
                                     response.setExplanation(explanation);
                                     response.setProcessingTimeMs(System.currentTimeMillis() - startTime);
                                     return response;
                                 });
                     } else {
-                        response.setProcessingTimeMs(System.currentTimeMillis() - startTime);
+                        long processingTime = System.currentTimeMillis() - startTime;
+                        logger.info("Query completed without LLM explanation in {}ms - {} matches found", 
+                            processingTime, matches.size());
+                        response.setProcessingTimeMs(processingTime);
                         return CompletableFuture.completedFuture(response);
                     }
                 })
                 .exceptionally(throwable -> {
-                    logger.error("Error processing query '{}': {}", request.getQuery(), throwable.getMessage());
+                    long processingTime = System.currentTimeMillis() - startTime;
+                    logger.error("Query processing failed for '{}' after {}ms: {}", 
+                        request.getQuery(), processingTime, throwable.getMessage(), throwable);
 
                     QueryResponse errorResponse = new QueryResponse();
                     errorResponse.setQuery(request.getQuery());
                     errorResponse.setExplanation("Sorry, I encountered an error while searching the code: " + throwable.getMessage());
-                    errorResponse.setProcessingTimeMs(System.currentTimeMillis() - startTime);
+                    errorResponse.setProcessingTimeMs(processingTime);
 
                     return errorResponse;
                 });
@@ -171,6 +191,7 @@ public class QueryService {
      * Search for specific code patterns (controllers, services, etc.)
      */
     public CompletableFuture<QueryResponse> searchByType(String codeType, int maxResults) {
+        logger.info("Searching for code type: '{}' (maxResults: {})", codeType, maxResults);
         QueryRequest request = new QueryRequest();
         request.setQuery("Find " + codeType + " code");
         request.setMaxResults(maxResults);
@@ -180,6 +201,7 @@ public class QueryService {
         Map<String, Object> filters = new HashMap<>();
         filters.put("type", codeType); // Should be "CLASS" not "class"
         request.setFilters(filters);
+        logger.debug("Type search filter: type={}", codeType);
 
         return searchCode(request);
     }
@@ -188,6 +210,7 @@ public class QueryService {
      * Search for Spring Boot components
      */
     public CompletableFuture<QueryResponse> searchSpringComponents(int maxResults) {
+        logger.info("Searching for Spring Boot components (maxResults: {})", maxResults);
         QueryRequest request = new QueryRequest();
         request.setQuery("Find Spring Boot components");
         request.setMaxResults(maxResults);
@@ -205,6 +228,7 @@ public class QueryService {
      * Find API endpoints in the codebase
      */
     public CompletableFuture<QueryResponse> findApiEndpoints() {
+        logger.info("Searching for REST API endpoints");
         QueryRequest request = new QueryRequest();
         request.setQuery("What REST API endpoints are available?");
         request.setMaxResults(10);
@@ -218,13 +242,16 @@ public class QueryService {
         return searchCode(request)
                 .thenCompose(response -> {
                     if (!response.getMatches().isEmpty()) {
+                        logger.info("Found {} endpoint matches, generating API analysis", response.getMatches().size());
                         String endpointContext = buildCodeContext(response.getMatches());
                         return llmService.analyzeApiEndpoints(endpointContext)
                                 .thenApply(analysis -> {
+                                    logger.debug("API endpoint analysis completed (length: {} chars)", analysis.length());
                                     response.setExplanation(analysis);
                                     return response;
                                 });
                     }
+                    logger.warn("No API endpoint matches found");
                     return CompletableFuture.completedFuture(response);
                 });
     }
@@ -233,6 +260,7 @@ public class QueryService {
      * Analyze business logic flow
      */
     public CompletableFuture<QueryResponse> analyzeBusinessLogic(String query) {
+        logger.info("Analyzing business logic for query: '{}'", query);
         QueryRequest request = new QueryRequest();
         request.setQuery(query);
         request.setMaxResults(8);
@@ -241,13 +269,16 @@ public class QueryService {
         return searchCode(request)
                 .thenCompose(response -> {
                     if (!response.getMatches().isEmpty()) {
+                        logger.info("Found {} matches for business logic analysis", response.getMatches().size());
                         String codeContext = buildCodeContext(response.getMatches());
                         return llmService.analyzeBusinessLogic(query, codeContext)
                                 .thenApply(analysis -> {
+                                    logger.debug("Business logic analysis completed (length: {} chars)", analysis.length());
                                     response.setExplanation(analysis);
                                     return response;
                                 });
                     }
+                    logger.warn("No matches found for business logic query: '{}'", query);
                     return CompletableFuture.completedFuture(response);
                 });
     }
@@ -256,6 +287,7 @@ public class QueryService {
      * Convert VectorStore search results to CodeMatch objects
      */
     private List<CodeMatch> convertSearchResults(List<VectorStoreService.SearchResult> searchResults) {
+        logger.debug("Converting {} search results to CodeMatch objects", searchResults.size());
         return searchResults.stream()
                 .map(result -> {
                     CodeMatch match = new CodeMatch();
@@ -282,15 +314,18 @@ public class QueryService {
                     return match;
                 })
                 .collect(Collectors.toList());
+        // Note: converted matches are logged in the calling method
     }
 
     /**
      * Build code context for LLM from matched code snippets
      */
     private String buildCodeContext(List<CodeMatch> matches) {
+        int contextLimit = Math.min(matches.size(), 5);
+        logger.debug("Building code context from {} matches (limited to {})", matches.size(), contextLimit);
         StringBuilder context = new StringBuilder();
 
-        for (int i = 0; i < matches.size() && i < 5; i++) { // Limit to top 5 matches
+        for (int i = 0; i < contextLimit; i++) { // Limit to top 5 matches
             CodeMatch match = matches.get(i);
             context.append("// ").append(match.getType())
                     .append(" from ").append(match.getClassName())
@@ -298,13 +333,16 @@ public class QueryService {
             context.append(match.getCode()).append("\n\n");
         }
 
-        return context.toString();
+        String result = context.toString();
+        logger.debug("Built code context: {} characters from {} matches", result.length(), contextLimit);
+        return result;
     }
 
     /**
      * Get query suggestions based on the codebase
      */
     public List<String> getQuerySuggestions() {
+        logger.debug("Providing query suggestions to user");
         return Arrays.asList(
                 "What REST endpoints are available?",
                 "Show me the controller classes",
@@ -323,6 +361,7 @@ public class QueryService {
      * Get search statistics
      */
     public CompletableFuture<Map<String, Object>> getSearchStats() {
+        logger.debug("Retrieving search statistics");
         return vectorStoreService.getCollectionStats()
                 .thenApply(stats -> {
                     Map<String, Object> searchStats = new HashMap<>();
@@ -330,6 +369,7 @@ public class QueryService {
                     searchStats.put("collectionInfo", stats);
                     searchStats.put("availableFilters", Arrays.asList("type", "className", "isSpringComponent", "isEndpoint"));
                     searchStats.put("supportedTypes", Arrays.asList("CLASS", "METHOD", "INTERFACE"));
+                    logger.info("Search stats compiled: {} total documents", stats.getOrDefault("documents_count", 0));
                     return searchStats;
                 });
     }

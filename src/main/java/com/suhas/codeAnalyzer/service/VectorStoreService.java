@@ -179,6 +179,7 @@ public class VectorStoreService {
                 .bodyToMono(List.class)
                 .timeout(timeout)
                 .map(collections -> {
+                    logger.debug("Checking {} collections for '{}':", collections.size(), collectionName);
                     for (Object col : collections) {
                         if (col instanceof Map) {
                             Map<String, Object> colMap = (Map<String, Object>) col;
@@ -190,6 +191,7 @@ public class VectorStoreService {
                             }
                         }
                     }
+                    logger.debug("Collection '{}' not found in existing collections", collectionName);
                     return false;
                 })
                 .doOnSuccess(exists -> logger.debug("Collection {} exists: {}", collectionName, exists))
@@ -223,7 +225,7 @@ public class VectorStoreService {
                     // Extract and store the collection UUID
                     this.collectionId = (String) response.get("id");
                     logger.info("Collection creation response: {}", response);
-                    logger.info("Created collection '{}' with UUID: {}", collectionName, collectionId);
+                    logger.info("Successfully created collection '{}' with UUID: {}", collectionName, collectionId);
                     return true;
                 })
                 .doOnError(error -> {
@@ -242,15 +244,16 @@ public class VectorStoreService {
      */
     public CompletableFuture<Boolean> storeEmbeddings(List<EmbeddingService.CodeEmbedding> embeddings) {
         if (embeddings.isEmpty()) {
-            logger.warn("No embeddings to store");
+            logger.warn("No embeddings provided to store");
             return CompletableFuture.completedFuture(true);
         }
 
-        logger.info("Storing {} embeddings in collection: {}", embeddings.size(), collectionName);
+        logger.info("Starting batch storage of {} embeddings in collection: {}", embeddings.size(), collectionName);
 
         // Process in batches to avoid overwhelming Chroma
         int batchSize = 50;
         List<List<EmbeddingService.CodeEmbedding>> batches = createBatches(embeddings, batchSize);
+        logger.info("Created {} batches of max size {} for embedding storage", batches.size(), batchSize);
 
         return processBatches(batches, 0)
                 .thenApply(results -> {
@@ -426,6 +429,7 @@ public class VectorStoreService {
             results.add(result);
         }
 
+        logger.debug("Converted {} search results", results.size());
         return results;
     }
 

@@ -91,12 +91,17 @@ public class EmbeddingService {
      */
     public CompletableFuture<List<Double>> generateEmbedding(String text) {
         if (text == null || text.trim().isEmpty()) {
+            logger.debug("Skipping embedding generation for empty text");
             return CompletableFuture.completedFuture(new ArrayList<>());
         }
 
         // Truncate if too long (embedding models have limits)
         String processedText = text.length() > 8000 ? text.substring(0, 8000) + "..." : text;
+        if (text.length() > 8000) {
+            logger.debug("Text truncated from {} to {} characters for embedding", text.length(), processedText.length());
+        }
 
+        logger.debug("Creating embedding request for text length: {} using model: {}", processedText.length(), embeddingModel);
         EmbeddingRequest request = new EmbeddingRequest(embeddingModel, processedText);
 
         return webClient.post()
@@ -108,9 +113,9 @@ public class EmbeddingService {
                 .retryWhen(Retry.backoff(3, Duration.ofSeconds(1))
                         .filter(throwable -> !(throwable instanceof WebClientResponseException.BadRequest)))
                 .map(EmbeddingResponse::getEmbedding)
-                .doOnSuccess(embedding -> logger.debug("Generated embedding for text of length: {}, embedding dimension: {}",
+                .doOnSuccess(embedding -> logger.debug("Successfully generated embedding for text of length: {}, embedding dimension: {}",
                         processedText.length(), embedding != null ? embedding.size() : 0))
-                .doOnError(error -> logger.error("Failed to generate embedding for text: {}", error.getMessage()))
+                .doOnError(error -> logger.error("Failed to generate embedding for text of length {}: {}", processedText.length(), error.getMessage()))
                 .toFuture();
     }
 
@@ -118,23 +123,30 @@ public class EmbeddingService {
      * Generate embeddings for multiple code chunks in batches
      */
     public CompletableFuture<List<CodeEmbedding>> generateEmbeddings(List<CodeParserService.CodeChunk> codeChunks) {
-        logger.info("Starting to generate embeddings for {} code chunks", codeChunks.size());
+        logger.info("Starting batch embedding generation for {} code chunks", codeChunks.size());
 
         // Process in batches to avoid overwhelming the service
         int batchSize = 5;
         List<List<CodeParserService.CodeChunk>> batches = createBatches(codeChunks, batchSize);
+        logger.debug("Created {} batches of size {} for processing", batches.size(), batchSize);
 
         return Flux.fromIterable(batches)
                 .flatMap(batch -> processBatch(batch), 2) // Process 2 batches concurrently
                 .collectList()
                 .map(this::flattenBatchResults)
-                .doOnSuccess(embeddings -> logger.info("Successfully generated {} embeddings", embeddings.size()))
-                .doOnError(error -> logger.error("Failed to generate embeddings: {}", error.getMessage()))
+                .doOnSuccess(embeddings -> {
+                    logger.info("Successfully generated {} embeddings out of {} requested chunks", embeddings.size(), codeChunks.size());
+                    if (embeddings.size() < codeChunks.size()) {
+                        logger.warn("Some embeddings failed to generate: {} successful out of {} total", embeddings.size(), codeChunks.size());
+                    }
+                })
+                .doOnError(error -> logger.error("Batch embedding generation failed: {}", error.getMessage()))
                 .toFuture();
     }
 
     private Mono<List<CodeEmbedding>> processBatch(List<CodeParserService.CodeChunk> batch) {
-        logger.debug("Processing batch of {} chunks", batch.size());
+        logger.debug("Processing embedding batch of {} chunks", batch.size());
+        long startTime = System.currentTimeMillis();
 
         return Flux.fromIterable(batch)
                 .flatMap(chunk -> {
@@ -146,20 +158,27 @@ public class EmbeddingService {
                                     createMetadataForChunk(chunk)
                             ))
                             .onErrorResume(error -> {
-                                logger.warn("Failed to generate embedding for chunk {}: {}", chunk.getId(), error.getMessage());
+                                logger.warn("Failed to generate embedding for chunk {} (type: {}, class: {}): {}", 
+                                    chunk.getId(), chunk.getType(), chunk.getClassName(), error.getMessage());
                                 return Mono.empty(); // Skip failed chunks
                             });
                 })
                 .collectList()
+                .doOnNext(results -> {
+                    long duration = System.currentTimeMillis() - startTime;
+                    logger.debug("Batch processing completed in {}ms, generated {} embeddings", duration, results.size());
+                })
                 .delayElement(Duration.ofMillis(500)); // Small delay between batches
     }
 
     private List<List<CodeParserService.CodeChunk>> createBatches(List<CodeParserService.CodeChunk> chunks, int batchSize) {
+        logger.debug("Creating batches from {} chunks with batch size {}", chunks.size(), batchSize);
         List<List<CodeParserService.CodeChunk>> batches = new ArrayList<>();
         for (int i = 0; i < chunks.size(); i += batchSize) {
             int end = Math.min(i + batchSize, chunks.size());
             batches.add(chunks.subList(i, end));
         }
+        logger.debug("Created {} batches for processing", batches.size());
         return batches;
     }
 
@@ -170,6 +189,7 @@ public class EmbeddingService {
     }
 
     private Map<String, Object> createMetadataForChunk(CodeParserService.CodeChunk chunk) {
+        logger.trace("Creating metadata for chunk: {} (type: {})", chunk.getId(), chunk.getType());
         Map<String, Object> metadata = new HashMap<>(chunk.getMetadata());
 
         // Add basic chunk information
@@ -209,7 +229,7 @@ public class EmbeddingService {
      * Generate embedding for a query (for searching)
      */
     public CompletableFuture<List<Double>> generateQueryEmbedding(String query) {
-        logger.debug("Generating embedding for query: {}", query);
+        logger.info("Generating embedding for search query: '{}'", query);
 
         // Add context to help with code-related queries
         String enhancedQuery = "Java Spring Boot code: " + query;
@@ -217,9 +237,9 @@ public class EmbeddingService {
         return generateEmbedding(enhancedQuery)
                 .whenComplete((embedding, throwable) -> {
                     if (throwable != null) {
-                        logger.error("Failed to generate query embedding: {}", throwable.getMessage());
+                        logger.error("Failed to generate query embedding for '{}': {}", query, throwable.getMessage());
                     } else {
-                        logger.debug("Generated query embedding with dimension: {}", embedding.size());
+                        logger.info("Successfully generated query embedding with dimension: {} for query: '{}'", embedding.size(), query);
                     }
                 });
     }
@@ -228,11 +248,17 @@ public class EmbeddingService {
      * Health check for embedding service
      */
     public CompletableFuture<Boolean> healthCheck() {
+        logger.debug("Performing embedding service health check");
         return generateEmbedding("test")
                 .thenApply(embedding -> embedding != null && !embedding.isEmpty())
                 .exceptionally(throwable -> {
-                    logger.warn("Embedding service health check failed: {}", throwable.getMessage());
+                    logger.error("Embedding service health check failed: {}", throwable.getMessage());
                     return false;
+                })
+                .whenComplete((result, throwable) -> {
+                    if (throwable == null) {
+                        logger.info("Embedding service health check completed: {}", result ? "HEALTHY" : "UNHEALTHY");
+                    }
                 });
     }
 
