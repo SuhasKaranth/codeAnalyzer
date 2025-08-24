@@ -45,6 +45,17 @@ public class QueryService {
         public void setIncludeExplanation(boolean includeExplanation) { this.includeExplanation = includeExplanation; }
         public Map<String, Object> getFilters() { return filters; }
         public void setFilters(Map<String, Object> filters) { this.filters = filters; }
+        @Override
+        public String toString() {
+            return "QueryRequest{" +
+                    "query='" + query + '\'' +
+                    ", maxResults=" + maxResults +
+                    ", includeCode=" + includeCode +
+                    ", includeExplanation=" + includeExplanation +
+                    ", filters=" + filters +
+                    '}';
+        }
+
     }
 
     public static class QueryResponse {
@@ -113,6 +124,23 @@ public class QueryService {
         public void setAnnotations(List<String> annotations) { this.annotations = annotations; }
         public Map<String, Object> getMetadata() { return metadata; }
         public void setMetadata(Map<String, Object> metadata) { this.metadata = metadata; }
+
+        @Override
+        public String toString() {
+            return "CodeMatch{" +
+                    "id='" + id + '\'' +
+                    ", code='" + code + '\'' +
+                    ", similarity=" + similarity +
+                    ", type='" + type + '\'' +
+                    ", className='" + className + '\'' +
+                    ", methodName='" + methodName + '\'' +
+                    ", packageName='" + packageName + '\'' +
+                    ", filePath='" + filePath + '\'' +
+                    ", annotations=" + annotations +
+                    ", metadata=" + metadata +
+                    '}';
+        }
+
     }
 
     /**
@@ -231,7 +259,7 @@ public class QueryService {
         logger.info("Searching for REST API endpoints");
         QueryRequest request = new QueryRequest();
         request.setQuery("What REST API endpoints are available?");
-        request.setMaxResults(10);
+        //request.setMaxResults(10);
         request.setIncludeExplanation(true);
 
         // Filter for endpoints
@@ -295,6 +323,7 @@ public class QueryService {
                     match.setCode(result.getDocument());
                     match.setSimilarity(1.0 - result.getDistance()); // Convert distance to similarity
                     match.setMetadata(result.getMetadata());
+                    logger.info("matched vector object {}", match);
 
                     // Extract metadata into specific fields
                     Map<String, Object> metadata = result.getMetadata();

@@ -226,24 +226,63 @@ public class LLMService {
     }
 
     /**
-     * Build prompt for API endpoint analysis
+     * Enhanced API analysis prompt with specific code filtering instructions
      */
     private String buildApiAnalysisPrompt(String codeContext) {
         return String.format("""
-            Analyze the following Spring Boot code and identify all REST API endpoints:
-            
-            ```java
-            %s
-            ```
-            
-            For each endpoint, provide:
-            - HTTP method and path
-            - What the endpoint does
-            - Request/response details
-            - Any dependencies or services called
-            
-            Format as a clear list.
-            """, codeContext);
+                Analyze this Spring Boot code and extract ONLY the REST API endpoints.
+                
+                ```java
+                %s
+                ```
+                
+                RULES FOR ANALYSIS:
+                1. Find classes with @RestController, @Controller, or @Path annotations
+                2. Extract HTTP endpoints (@GetMapping, @PostMapping, @RequestMapping, etc.)
+                3. IGNORE: @Service, @Repository, @Component, utility classes, main methods
+                
+                RULES FOR CODE SAMPLES:
+                1. Show ONLY controller classes that contain REST endpoints
+                2. Show ONLY the methods that have HTTP mapping annotations
+                3. Do NOT include: service implementations, repositories, domain models, configuration classes
+                4. If a class has no REST endpoints, do NOT include it in code samples
+                5. Truncate long method bodies - show only the method signature and key annotations
+                
+                REQUIRED OUTPUT FORMAT:
+                
+                ## REST Endpoints Found:
+                
+                ### [ControllerName]
+                **Base Path:** [class-level @RequestMapping path if any]
+                        
+                - **[HTTP_METHOD]** `[FULL_PATH]` → `[methodName]()` - [brief description]
+                        
+                ## Controller Code Samples:
+                        
+                **[ControllerName]:**
+                ```java
+                @RestController
+                @RequestMapping("/base-path")  // only if present
+                public class ControllerName {
+                    
+                    @GetMapping("/path")
+                    public ReturnType methodName(Parameters...) {
+                        // implementation details omitted
+                    }
+                    
+                    // ... other endpoint methods only
+                }
+                ```
+                        
+                VALIDATION CHECKLIST:
+                - [ ] Only show classes that have REST endpoints
+                - [ ] Only show methods with @GetMapping, @PostMapping, etc.
+                - [ ] Do not show service classes or repository classes in code samples
+                - [ ] Keep method bodies short or omit them
+                - [ ] Group by controller class
+                        
+                Be precise and focused - show only REST endpoint controllers and their HTTP mapping methods.
+                """, codeContext);
     }
 
     /**

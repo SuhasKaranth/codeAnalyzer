@@ -1,29 +1,40 @@
 package com.suhas.codeAnalyzer.chat.model;
 
 public class ActionResult {
-    private final boolean success;
-    private final String message;
-    private final Object data;
-    private final String errorDetails;
+    private boolean success;
+    private String message;
+    private Object data;
 
-    private ActionResult(boolean success, String message, Object data, String errorDetails) {
+    private ActionResult(boolean success, String message, Object data) {
         this.success = success;
         this.message = message;
         this.data = data;
-        this.errorDetails = errorDetails;
+    }
+
+    public static ActionResult success(String message) {
+        return new ActionResult(true, message, null);
     }
 
     public static ActionResult success(String message, Object data) {
-        return new ActionResult(true, message, data, null);
+        return new ActionResult(true, message, data);
     }
 
-    public static ActionResult error(String errorMessage) {
-        return new ActionResult(false, null, null, errorMessage);
+    public static ActionResult error(String message) {
+        return new ActionResult(false, message, null);
     }
 
     // Getters
     public boolean isSuccess() { return success; }
     public String getMessage() { return message; }
     public Object getData() { return data; }
-    public String getErrorDetails() { return errorDetails; }
+
+    @Override
+    public String toString() {
+        return "ActionResult{" +
+                "success=" + success +
+                ", message='" + message + '\'' +
+                ", data=" + data +
+                '}';
+    }
+
 }

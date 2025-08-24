@@ -49,22 +49,72 @@ public class QueryController {
     }
 
     /**
-     * Simple text query endpoint
+     * Simple text query endpoint - CHANGED TO POST
+     * POST /api/query/ask
+     */
+    @PostMapping("/ask")
+    public CompletableFuture<ResponseEntity<QueryService.QueryResponse>> askQuestion(@RequestBody Map<String, Object> request) {
+        String query = (String) request.get("query");
+        logger.info("Received question: {}", query);
+
+        QueryService.QueryRequest queryRequest = new QueryService.QueryRequest();
+        queryRequest.setQuery(query);
+
+        // Handle optional parameters from request body
+        if (request.containsKey("maxResults")) {
+            queryRequest.setMaxResults((Integer) request.getOrDefault("maxResults", 5));
+        } else {
+            queryRequest.setMaxResults(5);
+        }
+
+        if (request.containsKey("includeExplanation")) {
+            queryRequest.setIncludeExplanation((Boolean) request.getOrDefault("includeExplanation", true));
+        } else {
+            queryRequest.setIncludeExplanation(true);
+        }
+
+        if (request.containsKey("includeCode")) {
+            queryRequest.setIncludeCode((Boolean) request.getOrDefault("includeCode", true));
+        } else {
+            queryRequest.setIncludeCode(true);
+        }
+
+        if (request.containsKey("filters")) {
+            queryRequest.setFilters((Map<String, Object>) request.getOrDefault("filters", new HashMap<>()));
+        } else {
+            queryRequest.setFilters(new HashMap<>());
+        }
+
+        return queryService.searchCode(queryRequest)
+                .thenApply(ResponseEntity::ok)
+                .exceptionally(throwable -> {
+                    logger.error("Error processing question: {}", throwable.getMessage());
+                    QueryService.QueryResponse errorResponse = new QueryService.QueryResponse();
+                    errorResponse.setQuery(query);
+                    errorResponse.setExplanation("Sorry, I couldn't process your question: " + throwable.getMessage());
+                    return ResponseEntity.status(500).body(errorResponse);
+                });
+    }
+
+    /**
+     * Alternative GET endpoint for simple queries (backward compatibility)
      * GET /api/query/ask?q=what controllers are available
      */
     @GetMapping("/ask")
-    public CompletableFuture<ResponseEntity<QueryService.QueryResponse>> askQuestion(@RequestParam String q) {
-        logger.info("Received question: {}", q);
+    public CompletableFuture<ResponseEntity<QueryService.QueryResponse>> askQuestionGet(@RequestParam String q) {
+        logger.info("Received GET question: {}", q);
 
         QueryService.QueryRequest request = new QueryService.QueryRequest();
         request.setQuery(q);
         request.setMaxResults(5);
         request.setIncludeExplanation(true);
+        request.setIncludeCode(true);
+        request.setFilters(new HashMap<>());
 
         return queryService.searchCode(request)
                 .thenApply(ResponseEntity::ok)
                 .exceptionally(throwable -> {
-                    logger.error("Error processing question: {}", throwable.getMessage());
+                    logger.error("Error processing GET question: {}", throwable.getMessage());
                     QueryService.QueryResponse errorResponse = new QueryService.QueryResponse();
                     errorResponse.setQuery(q);
                     errorResponse.setExplanation("Sorry, I couldn't process your question: " + throwable.getMessage());

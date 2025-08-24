@@ -96,8 +96,9 @@ public class EmbeddingService {
         }
 
         // Truncate if too long (embedding models have limits)
-        String processedText = text.length() > 8000 ? text.substring(0, 8000) + "..." : text;
-        if (text.length() > 8000) {
+        // Reduce the character limit significantly
+        String processedText = text.length() > 3000 ? text.substring(0, 3000) + "..." : text;
+        if (text.length() > 3000) {
             logger.debug("Text truncated from {} to {} characters for embedding", text.length(), processedText.length());
         }
 
@@ -188,29 +189,43 @@ public class EmbeddingService {
                 .toList();
     }
 
+    // Update your EmbeddingService.createMetadataForChunk method to ensure ChromaDB compatibility
+
     private Map<String, Object> createMetadataForChunk(CodeParserService.CodeChunk chunk) {
         logger.trace("Creating metadata for chunk: {} (type: {})", chunk.getId(), chunk.getType());
-        Map<String, Object> metadata = new HashMap<>(chunk.getMetadata());
+        Map<String, Object> metadata = new HashMap<>();
 
-        // Add basic chunk information
-        metadata.put("chunkId", chunk.getId());
-        metadata.put("type", chunk.getType());
-        metadata.put("className", chunk.getClassName());
-        metadata.put("packageName", chunk.getPackageName());
-        metadata.put("filePath", chunk.getFilePath());
-        metadata.put("contentLength", chunk.getContent().length());
-        metadata.put("hasAnnotations", !chunk.getAnnotations().isEmpty());
+        // Ensure all values are strings or numbers (ChromaDB compatible)
+        metadata.put("chunkId", chunk.getId() != null ? chunk.getId() : "");
+        metadata.put("type", chunk.getType() != null ? chunk.getType() : "");
+        metadata.put("className", chunk.getClassName() != null ? chunk.getClassName() : "");
+        metadata.put("packageName", chunk.getPackageName() != null ? chunk.getPackageName() : "");
+        metadata.put("filePath", chunk.getFilePath() != null ? chunk.getFilePath() : "");
+        metadata.put("contentLength", String.valueOf(chunk.getContent() != null ? chunk.getContent().length() : 0));
+        metadata.put("hasAnnotations", String.valueOf(chunk.getAnnotations() != null && !chunk.getAnnotations().isEmpty()));
 
         // Add Spring-specific metadata
         if (chunk.getAnnotations() != null) {
             metadata.put("annotations", String.join(",", chunk.getAnnotations()));
-            metadata.put("isSpringComponent", isSpringComponent(chunk.getAnnotations()));
+            metadata.put("isSpringComponent", String.valueOf(isSpringComponent(chunk.getAnnotations())));
+        } else {
+            metadata.put("annotations", "");
+            metadata.put("isSpringComponent", "false");
         }
 
         // Add method-specific metadata
         if ("METHOD".equals(chunk.getType()) && chunk.getMethodName() != null) {
             metadata.put("methodName", chunk.getMethodName());
-            metadata.put("fullMethodName", chunk.getClassName() + "." + chunk.getMethodName());
+            metadata.put("fullMethodName", (chunk.getClassName() != null ? chunk.getClassName() : "") + "." + chunk.getMethodName());
+        }
+
+        // Copy existing metadata from chunk, ensuring all values are strings
+        if (chunk.getMetadata() != null) {
+            chunk.getMetadata().forEach((key, value) -> {
+                if (value != null) {
+                    metadata.put(key, value.toString());
+                }
+            });
         }
 
         return metadata;
@@ -268,4 +283,6 @@ public class EmbeddingService {
     public String getEmbeddingModelInfo() {
         return String.format("Model: %s, Service: %s", embeddingModel, ollamaBaseUrl);
     }
+
+
 }
