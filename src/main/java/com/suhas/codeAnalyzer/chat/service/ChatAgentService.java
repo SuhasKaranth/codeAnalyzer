@@ -47,6 +47,7 @@ public class ChatAgentService {
                 LLMAction enhancedAction = enhanceActionWithContext(llmResponse.getLLMAction(), context);
 
                 actionResult = chatMethodExecutor.execute(enhancedAction);
+                log.info("Inside ChatAgentService, post chatMethodExecutor.execute. Action result: {}", actionResult.toString());
 
                 if (actionResult.isSuccess()) {
                     finalResponse = llmResponse.getResponse() + "\n\n" + actionResult.getMessage();
@@ -54,7 +55,7 @@ public class ChatAgentService {
                     // Update context with successful action results
                     updateContextFromAction(context, enhancedAction, actionResult);
                 } else {
-                    finalResponse = "I encountered an error: " + actionResult.getErrorDetails() +
+                    finalResponse = "I encountered an error: " + actionResult.getMessage()+
                             ". Please try again or ask me something else.";
                 }
             } else {

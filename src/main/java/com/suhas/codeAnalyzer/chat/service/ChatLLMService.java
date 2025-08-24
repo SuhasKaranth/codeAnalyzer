@@ -7,11 +7,15 @@ import com.suhas.codeAnalyzer.chat.model.*;
 import com.suhas.codeAnalyzer.chat.ollama.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import jakarta.annotation.PostConstruct;
+import java.io.UnsupportedEncodingException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -32,8 +36,11 @@ public class ChatLLMService {
     @Value("${chat.use-pattern-matching:true}")
     private boolean usePatternMatching;
 
-    @Value("${chat.force-pattern-matching:true}")
+    @Value("${chat.force-pattern-matching:false}")
     private boolean forcePatternMatching;
+
+    @Value("${server.port:8080}")
+    private String serverPort;
 
     private RestTemplate restTemplate;
     private ObjectMapper objectMapper;
@@ -50,33 +57,53 @@ public class ChatLLMService {
         this.objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         this.objectMapper.registerModule(new JavaTimeModule());
 
+        // TEMPORARY: Force the configuration for testing
+        this.forcePatternMatching = false;
+        this.usePatternMatching = true;
+
         log.info("ChatLLMService initialized:");
         log.info("  Model: {}", modelName);
         log.info("  Pattern matching: {}", usePatternMatching);
         log.info("  Force pattern matching: {}", forcePatternMatching);
         log.info("  Ollama URL: {}", ollamaBaseUrl);
+        log.info("  Server port: {}", serverPort);
     }
 
     public LLMResponse callWithContext(String userMessage, ConversationContext context) {
         log.info("=== Processing message: '{}' ===", userMessage);
         log.info("Session context - Repository: {}", context.getCurrentRepository());
+        log.info("Configuration - usePatternMatching: {}, forcePatternMatching: {}", usePatternMatching, forcePatternMatching);
 
-        // ALWAYS try pattern matching first
-        LLMResponse patternResponse = tryPatternMatching(userMessage, context);
-        if (patternResponse != null) {
-            log.info("✅ Used pattern matching - Action: {}", patternResponse.getAction());
-            return patternResponse;
+        // ALWAYS try pattern matching first if enabled
+        if (usePatternMatching) {
+            LLMResponse patternResponse = tryPatternMatching(userMessage, context);
+            if (patternResponse != null) {
+                log.info("✅ Used pattern matching - Action: {}", patternResponse.getAction());
+                return patternResponse;
+            }
         }
 
-        // If force pattern matching is enabled, don't call LLM
+        // If force pattern matching is enabled, don't call other APIs
         if (forcePatternMatching) {
             log.info("🔒 Force pattern matching enabled, creating fallback response");
             return createGenericHelpResponse(userMessage);
         }
 
-        // Fall back to LLM for complex queries
-        log.info("🤖 Falling back to LLM for complex query");
-        return callLLM(userMessage, context);
+        // Check if we have a repository to query against
+        if (context.getCurrentRepository() != null) {
+            log.info("🔍 No pattern matched, trying Query API for repository-specific question");
+            return callQueryAPI(userMessage, context);
+        }
+
+        // For repository-specific questions without context, suggest analyzing first
+        if (isRepositorySpecificQuestion(userMessage)) {
+            log.info("📝 Repository-specific question without context, suggesting analysis");
+            return createAnalysisNeededResponse(userMessage);
+        }
+
+        // Fall back to direct LLM for general questions
+        log.info("🤖 Falling back to direct LLM for general query");
+        return callDirectLLM(userMessage, context);
     }
 
     private LLMResponse tryPatternMatching(String userMessage, ConversationContext context) {
@@ -143,6 +170,117 @@ public class ChatLLMService {
         return null;
     }
 
+    /**
+     * NEW: Call the Query API for repository-specific questions
+     */
+    private LLMResponse callQueryAPI(String userMessage, ConversationContext context) {
+        try {
+            log.info("🔍 Calling Query API for: '{}'", userMessage);
+            long startTime = System.currentTimeMillis();
+
+            // Build request to your query API
+            String queryApiUrl = "http://localhost:" + serverPort + "/api/query/ask";
+
+            Map<String, Object> requestBody = new HashMap<>();
+            requestBody.put("query", userMessage);
+            requestBody.put("includeExplanation", true);
+            requestBody.put("maxResults", 5);
+
+            log.info("📡 Calling Query API: {}", queryApiUrl);
+
+            // Call your existing query API
+            Map<String, Object> response = restTemplate.postForObject(
+                    queryApiUrl,
+                    requestBody,
+                    Map.class
+            );
+
+            long duration = System.currentTimeMillis() - startTime;
+            log.info("⏱️ Query API call completed in {} ms", duration);
+
+
+            if (response != null) {
+                response.forEach((key, value) ->
+                        log.info("Call the Query API for repository-specific questions, inside callQueryAPI in ChatLLMService  " +
+                                "Key: {}, Value: {}", key, value)
+                );
+            }
+
+
+            if (response != null && response.get("explanation") != null) {
+                String content = (String) response.get("explanation");
+                log.info("✅ Query API response received: {} chars", content.length());
+
+                // Convert to LLMResponse format
+                LLMResponse llmResponse = new LLMResponse();
+                llmResponse.setAction("QUERY_RESPONSE");
+                llmResponse.setParameters(response); //changed from new HashMap<>() to response
+                llmResponse.setResponse(content);
+                llmResponse.setSuggestions(List.of(
+                        "What endpoints does it have?",
+                        "Show me the Spring components",
+                        "Search for specific logic"
+                ));
+                llmResponse.setNeedsUserInput(false);
+
+                return llmResponse;
+            } else {
+                log.warn("❌ Empty or invalid response from Query API");
+                return callDirectLLM(userMessage, context);
+            }
+
+        } catch (Exception e) {
+            log.error("❌ Error calling Query API: {}", e.getMessage());
+            log.info("🔄 Falling back to direct LLM");
+            return callDirectLLM(userMessage, context);
+        }
+    }
+
+    /**
+     * RENAMED: Direct LLM call (previously callLLM)
+     */
+    private LLMResponse callDirectLLM(String userMessage, ConversationContext context) {
+        try {
+            log.info("🤖 Calling Ollama directly with model: {}", modelName);
+            long startTime = System.currentTimeMillis();
+
+            String contextualPrompt = buildContextualPrompt(userMessage, context);
+            log.info("📝 Contextual prompt: {}", contextualPrompt);
+
+            List<OllamaMessage> messages = new ArrayList<>();
+            messages.add(OllamaMessage.system(getSimpleSystemPrompt()));
+            messages.add(OllamaMessage.user(contextualPrompt));
+
+            OllamaRequest request = OllamaRequest.builder()
+                    .model(modelName)
+                    .messages(messages)
+                    .temperature(0.1)
+                    .build();
+
+            OllamaResponse ollamaResponse = restTemplate.postForObject(
+                    ollamaBaseUrl + "/api/chat",
+                    request,
+                    OllamaResponse.class
+            );
+
+            long duration = System.currentTimeMillis() - startTime;
+            log.info("⏱️ Direct LLM call completed in {} ms", duration);
+
+            if (ollamaResponse != null && ollamaResponse.getMessage() != null) {
+                String content = ollamaResponse.getMessage().getContent();
+                log.info("🤖 Raw Ollama response: {}", content);
+                return parseStructuredResponse(content);
+            } else {
+                log.error("❌ Invalid response from Ollama");
+                return createFallbackResponse(userMessage);
+            }
+
+        } catch (Exception e) {
+            log.error("❌ Error calling Ollama directly", e);
+            return createFallbackResponse(userMessage);
+        }
+    }
+
     // NEW: Status response that checks current state
     private LLMResponse createStatusResponse(String userMessage, ConversationContext context) {
         LLMResponse response = new LLMResponse();
@@ -172,48 +310,6 @@ public class ChatLLMService {
         ));
         response.setNeedsUserInput(false);
         return response;
-    }
-
-    private LLMResponse callLLM(String userMessage, ConversationContext context) {
-        try {
-            log.info("🤖 Calling Ollama with model: {}", modelName);
-            long startTime = System.currentTimeMillis();
-
-            String contextualPrompt = buildContextualPrompt(userMessage, context);
-            log.info("📝 Contextual prompt: {}", contextualPrompt);
-
-            List<OllamaMessage> messages = new ArrayList<>();
-            messages.add(OllamaMessage.system(getSimpleSystemPrompt()));
-            messages.add(OllamaMessage.user(contextualPrompt));
-
-            OllamaRequest request = OllamaRequest.builder()
-                    .model(modelName)
-                    .messages(messages)
-                    .temperature(0.1)
-                    .build();
-
-            OllamaResponse ollamaResponse = restTemplate.postForObject(
-                    ollamaBaseUrl + "/api/chat",
-                    request,
-                    OllamaResponse.class
-            );
-
-            long duration = System.currentTimeMillis() - startTime;
-            log.info("⏱️ LLM call completed in {} ms", duration);
-
-            if (ollamaResponse != null && ollamaResponse.getMessage() != null) {
-                String content = ollamaResponse.getMessage().getContent();
-                log.info("🤖 Raw Ollama response: {}", content);
-                return parseStructuredResponse(content);
-            } else {
-                log.error("❌ Invalid response from Ollama");
-                return createFallbackResponse(userMessage);
-            }
-
-        } catch (Exception e) {
-            log.error("❌ Error calling Ollama", e);
-            return createFallbackResponse(userMessage);
-        }
     }
 
     private String getSimpleSystemPrompt() {
@@ -366,6 +462,41 @@ public class ChatLLMService {
         return response;
     }
 
+    /**
+     * Check if the question is about code/repository but no repository is analyzed
+     */
+    private boolean isRepositorySpecificQuestion(String message) {
+        String lowerMessage = message.toLowerCase();
+        return containsAny(lowerMessage,
+                "controller", "service", "class", "method", "function",
+                "code", "implementation", "logic", "endpoint", "api",
+                "spring", "mvc", "rest", "repository", "component");
+    }
+
+    /**
+     * Suggest analyzing a repository first for repository-specific questions
+     */
+    private LLMResponse createAnalysisNeededResponse(String userMessage) {
+        LLMResponse response = new LLMResponse();
+        response.setAction(null);
+        response.setParameters(new HashMap<>());
+        response.setResponse("I'd be happy to help you understand code like ProductController! However, I need to analyze a repository first to give you specific information about it.\n\n" +
+                "Please provide a GitHub repository URL to analyze, like:\n" +
+                "**'Analyze https://github.com/owner/repository'**\n\n" +
+                "Once I've analyzed the repository, I can answer detailed questions about:\n" +
+                "• What specific controllers do\n" +
+                "• How services work\n" +
+                "• REST endpoints available\n" +
+                "• Spring components and their relationships");
+        response.setSuggestions(List.of(
+                "Analyze https://github.com/springframeworkguru/springbootwebapp",
+                "What can you analyze?",
+                "Check system health"
+        ));
+        response.setNeedsUserInput(false);
+        return response;
+    }
+
     // Helper methods
     private boolean containsAny(String text, String... keywords) {
         for (String keyword : keywords) {
@@ -406,8 +537,17 @@ public class ChatLLMService {
     }
 
     private LLMResponse parseStructuredResponse(String response) {
-        // For now, just create a fallback since LLM is not following JSON format
-        log.warn("LLM returned non-structured response: {}", response);
-        return createFallbackResponse(response);
+        // For now, just create a simple response wrapper
+        LLMResponse llmResponse = new LLMResponse();
+        llmResponse.setAction("DIRECT_LLM_RESPONSE");
+        llmResponse.setParameters(new HashMap<>());
+        llmResponse.setResponse(response);
+        llmResponse.setSuggestions(List.of(
+                "What else can you tell me?",
+                "Find REST endpoints",
+                "Check system status"
+        ));
+        llmResponse.setNeedsUserInput(false);
+        return llmResponse;
     }
 }
