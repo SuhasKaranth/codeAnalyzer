@@ -33,6 +33,15 @@ public class ChatLLMService {
     @Value("${ollama.model:llama3.2:1b}")
     private String modelName;
 
+    @Value("${slm.intent.model:phi3:3.8b}")
+    private String slmModelName;
+
+    @Value("${slm.intent.temperature:0.1}")
+    private double slmTemperature;
+
+    @Value("${slm.intent.enabled:true}")
+    private boolean slmIntentEnabled;
+
     @Value("${chat.use-pattern-matching:true}")
     private boolean usePatternMatching;
 
@@ -62,7 +71,9 @@ public class ChatLLMService {
         this.usePatternMatching = true;
 
         log.info("ChatLLMService initialized:");
-        log.info("  Model: {}", modelName);
+        log.info("  Main model: {}", modelName);
+        log.info("  SLM model: {}", slmModelName);
+        log.info("  SLM intent analysis: {}", slmIntentEnabled);
         log.info("  Pattern matching: {}", usePatternMatching);
         log.info("  Force pattern matching: {}", forcePatternMatching);
         log.info("  Ollama URL: {}", ollamaBaseUrl);
@@ -74,11 +85,28 @@ public class ChatLLMService {
         log.info("Session context - Repository: {}", context.getCurrentRepository());
         log.info("Configuration - usePatternMatching: {}, forcePatternMatching: {}", usePatternMatching, forcePatternMatching);
 
-        // ALWAYS try pattern matching first if enabled
-        if (usePatternMatching) {
+        // PRIORITY 1: Try SLM intent analysis first (if enabled)
+        String slmIntent = null;
+        if (slmIntentEnabled) {
+            slmIntent = analyzePotentialIntentWithSLM(userMessage, context);
+            if (slmIntent != null && !slmIntent.equals("UNKNOWN")) {
+                log.info("🧠 SLM detected intent: {}", slmIntent);
+                LLMResponse slmResponse = createResponseFromIntent(slmIntent, userMessage, context);
+                if (slmResponse != null) {
+                    log.info("✅ Used SLM intent analysis - Action: {}", slmResponse.getAction());
+                    return slmResponse;
+                }
+            }
+        } else {
+            log.info("🚫 SLM intent analysis disabled, skipping");
+        }
+
+        // PRIORITY 2: Fallback to pattern matching if SLM fails and pattern matching is enabled
+        if (usePatternMatching && (slmIntent == null || slmIntent.equals("UNKNOWN"))) {
+            log.info("🔄 SLM intent unclear, trying pattern matching fallback");
             LLMResponse patternResponse = tryPatternMatching(userMessage, context);
             if (patternResponse != null) {
-                log.info("✅ Used pattern matching - Action: {}", patternResponse.getAction());
+                log.info("✅ Used pattern matching fallback - Action: {}", patternResponse.getAction());
                 return patternResponse;
             }
         }
@@ -91,7 +119,7 @@ public class ChatLLMService {
 
         // Check if we have a repository to query against
         if (context.getCurrentRepository() != null) {
-            log.info("🔍 No pattern matched, trying Query API for repository-specific question");
+            log.info("🔍 No clear intent detected, trying Query API for repository-specific question");
             return callQueryAPI(userMessage, context);
         }
 
@@ -160,14 +188,195 @@ public class ChatLLMService {
 
         // PRIORITY 8: GitHub URL detection for ANALYSIS (only if explicitly asking to analyze)
         if (GITHUB_URL_PATTERN.matcher(userMessage).find() &&
-                containsAny(message, "analyze", "analysis", "process", "start", "begin")) {
+                containsAny(message, "analyze", "analysis", "process", "start", "begin") &&
+                !containsAny(message, "explain", "what does", "describe", "detail", "specific file")) {
             String repoUrl = extractGitHubUrl(userMessage);
             log.info("✅ Detected GitHub URL for analysis: {}", repoUrl);
             return createAnalyzeRepoResponse(repoUrl);
         }
+        
+        // PRIORITY 9: Detailed code explanation requests (when repository is already analyzed)
+        if (containsAny(message, "explain", "what does", "describe", "detail") &&
+                (message.contains(".java") || message.contains(".kt") || message.contains(".groovy") || 
+                 message.contains("class") || message.contains("file") || message.contains("method"))) {
+            log.info("✅ Detected detailed code explanation request");
+            if (context.getCurrentRepository() != null) {
+                return callQueryAPI(userMessage, context);
+            } else {
+                return createAnalysisNeededResponse(userMessage);
+            }
+        }
 
         log.info("❌ No pattern matched for: '{}'", message);
         return null;
+    }
+
+    /**
+     * NEW: SLM-based intent analysis using phi3:3.8b
+     */
+    public String analyzePotentialIntentWithSLM(String userMessage, ConversationContext context) {
+        try {
+            log.info("🧠 Analyzing intent with SLM: '{}'", userMessage);
+            long startTime = System.currentTimeMillis();
+
+            String intentPrompt = buildIntentAnalysisPrompt(userMessage, context);
+            log.debug("📝 Intent analysis prompt: {}", intentPrompt);
+
+            List<OllamaMessage> messages = new ArrayList<>();
+            messages.add(OllamaMessage.system(getIntentAnalysisSystemPrompt()));
+            messages.add(OllamaMessage.user(intentPrompt));
+
+            OllamaRequest request = OllamaRequest.builder()
+                    .model(slmModelName)
+                    .messages(messages)
+                    .temperature(slmTemperature)
+                    .build();
+
+            OllamaResponse ollamaResponse = restTemplate.postForObject(
+                    ollamaBaseUrl + "/api/chat",
+                    request,
+                    OllamaResponse.class
+            );
+
+            long duration = System.currentTimeMillis() - startTime;
+            log.info("⏱️ SLM intent analysis completed in {} ms", duration);
+
+            if (ollamaResponse != null && ollamaResponse.getMessage() != null) {
+                String intentResponse = ollamaResponse.getMessage().getContent().trim();
+                log.info("🧠 SLM Intent Analysis Result: {}", intentResponse);
+                
+                // Extract the action from the response
+                String extractedAction = extractActionFromSLMResponse(intentResponse);
+                log.info("🎯 Extracted Action: {}", extractedAction);
+                
+                return extractedAction;
+            } else {
+                log.error("❌ Invalid response from SLM for intent analysis");
+                return null;
+            }
+
+        } catch (Exception e) {
+            log.error("❌ Error during SLM intent analysis", e);
+            return null;
+        }
+    }
+
+    private String getIntentAnalysisSystemPrompt() {
+        return """
+            You are an intent classifier for a code analysis assistant.
+            Analyze the user's message and determine their primary intent.
+            
+            Available actions:
+            - ANALYZE_REPO: User wants to clone/analyze a NEW GitHub repository (contains GitHub URL and words like "analyze", "clone")
+            - GET_STATUS: User wants to check analysis progress or status (contains "status", "progress", "complete", "finished")
+            - FIND_ENDPOINTS: User wants to find REST API endpoints (contains "endpoint", "API", "REST", "controller" but NOT asking about specific file)
+            - FIND_COMPONENTS: User wants to find Spring components/services (contains "component", "service", "bean" but NOT asking about specific file)
+            - SEARCH_CODE: User wants to search for specific code patterns (contains "search", "find", "look for" with search terms)
+            - LIST_FILES: User wants to see repository file structure (contains "files", "structure", "list", "directory")
+            - GET_HEALTH: User wants to check system health (contains "health", "check", "working")
+            - QUERY_RESPONSE: User asks detailed questions about already analyzed code, specific files, classes, methods, or architecture (contains "explain", "what does", "how does", "describe", "detail", file paths, class names)
+            - GREETING: User is greeting or asking what you can do (contains "hello", "hi", "help", "what can you do")
+            
+            Key distinction: 
+            - Use ANALYZE_REPO only when user wants to analyze a NEW repository (with GitHub URL)
+            - Use QUERY_RESPONSE when user asks about existing code, specific files, classes, or wants detailed explanations
+            
+            Respond with ONLY the action name (e.g., "QUERY_RESPONSE") or "UNKNOWN" if unclear.
+            Do not include explanations or additional text.
+            """;
+    }
+
+    private String buildIntentAnalysisPrompt(String userMessage, ConversationContext context) {
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("User message: \"").append(userMessage).append("\"");
+        
+        if (context.getCurrentRepository() != null) {
+            prompt.append("\nContext: Repository '").append(context.getCurrentRepository()).append("' is currently analyzed and available for queries");
+            prompt.append("\nNote: User can ask detailed questions about this analyzed repository");
+        } else {
+            prompt.append("\nContext: No repository is currently analyzed");
+            prompt.append("\nNote: User must analyze a repository first before asking about specific files or code");
+        }
+        
+        // Additional context clues
+        if (userMessage.toLowerCase().contains("explain") || userMessage.toLowerCase().contains("what does")) {
+            prompt.append("\nNote: User is asking for explanations, likely wants QUERY_RESPONSE");
+        }
+        
+        if (userMessage.contains("/") && (userMessage.contains(".java") || userMessage.contains(".kt") || userMessage.contains(".groovy"))) {
+            prompt.append("\nNote: User mentions specific file path, likely wants QUERY_RESPONSE");
+        }
+        
+        return prompt.toString();
+    }
+
+    private String extractActionFromSLMResponse(String response) {
+        // Clean the response and extract action
+        String cleaned = response.toUpperCase().trim();
+        
+        // List of valid actions
+        String[] validActions = {
+            "ANALYZE_REPO", "GET_STATUS", "FIND_ENDPOINTS", "FIND_COMPONENTS",
+            "SEARCH_CODE", "LIST_FILES", "GET_HEALTH", "QUERY_RESPONSE", "GREETING"
+        };
+        
+        // Check if response contains any valid action
+        for (String action : validActions) {
+            if (cleaned.contains(action)) {
+                return action;
+            }
+        }
+        
+        return "UNKNOWN";
+    }
+
+    /**
+     * NEW: Create response based on SLM intent analysis result
+     */
+    private LLMResponse createResponseFromIntent(String intent, String userMessage, ConversationContext context) {
+        switch (intent) {
+            case "ANALYZE_REPO":
+                String repoUrl = extractGitHubUrl(userMessage);
+                if (repoUrl != null) {
+                    return createAnalyzeRepoResponse(repoUrl);
+                } else {
+                    // SLM detected analyze intent but no URL found
+                    return createAnalysisNeededResponse(userMessage);
+                }
+
+            case "GET_STATUS":
+                return createStatusResponse(userMessage, context);
+
+            case "FIND_ENDPOINTS":
+                return createFindEndpointsResponse();
+
+            case "FIND_COMPONENTS":
+                return createFindComponentsResponse();
+
+            case "SEARCH_CODE":
+                String query = extractSearchQuery(userMessage);
+                return createSearchResponse(query);
+
+            case "LIST_FILES":
+                return createListFilesResponse();
+
+            case "GET_HEALTH":
+                return createHealthResponse();
+
+            case "QUERY_RESPONSE":
+                if (context.getCurrentRepository() != null) {
+                    return callQueryAPI(userMessage, context);
+                } else {
+                    return createAnalysisNeededResponse(userMessage);
+                }
+
+            case "GREETING":
+                return createGreetingResponse();
+
+            default:
+                log.warn("Unhandled SLM intent: {}", intent);
+                return null;
+        }
     }
 
     /**

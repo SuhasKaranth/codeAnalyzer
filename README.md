@@ -49,8 +49,9 @@ brew install ollama
 ollama serve
 
 # In a new terminal, pull the required models
-ollama pull codellama:7b-instruct    # For code analysis
-ollama pull nomic-embed-text         # For embeddings
+ollama pull codellama:7b-instruct                              # For code analysis
+ollama pull unclemusclez/jina-embeddings-v2-base-code:latest   # For embeddings
+ollama pull phi3:3.8b                                         # For chat intent analysis
 
 # Verify installation
 curl http://localhost:11434/api/tags
