@@ -428,7 +428,122 @@ paths:
           description: Error
 
   # ================================
-  # NEW CHAT AGENT ENDPOINTS
+  # USER SESSION MANAGEMENT ENDPOINTS
+  # ================================
+
+  /api/user/session/start:
+    post:
+      summary: Start or resume user session
+      description: >
+        Initialize a new user session or resume an existing one using email.
+        Returns user info, session context, and repository history.
+      tags:
+        - User Sessions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionStartRequest'
+            example:
+              email: "user@example.com"
+      responses:
+        "200":
+          description: Session started successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionStartResponse'
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/user/{email}/repositories:
+    get:
+      summary: Get user's repositories
+      description: Retrieve all repositories that a user has analyzed
+      tags:
+        - User Sessions
+      parameters:
+        - in: path
+          name: email
+          required: true
+          schema:
+            type: string
+            format: email
+          description: User's email address
+          example: "user@example.com"
+      responses:
+        "200":
+          description: User's repositories retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRepositoriesResponse'
+        "500":
+          description: Server error
+
+  /api/user/session/continue:
+    post:
+      summary: Continue session with specific repository
+      description: Resume conversation context with a previously analyzed repository
+      tags:
+        - User Sessions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContinueSessionRequest'
+            example:
+              email: "user@example.com"
+              repositoryUrl: "https://github.com/spring-projects/spring-boot"
+      responses:
+        "200":
+          description: Session continued successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContinueSessionResponse'
+        "400":
+          description: Repository not found or not analyzed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "500":
+          description: Server error
+
+  /api/user/{email}/session:
+    get:
+      summary: Get current session info
+      description: Retrieve current session information for a user
+      tags:
+        - User Sessions
+      parameters:
+        - in: path
+          name: email
+          required: true
+          schema:
+            type: string
+            format: email
+          description: User's email address
+          example: "user@example.com"
+      responses:
+        "200":
+          description: Session information retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSessionResponse'
+        "500":
+          description: Server error
+
+  # ================================
+  # CHAT AGENT ENDPOINTS (UPDATED)
   # ================================
 
   /api/chat/message:
@@ -445,16 +560,17 @@ paths:
           application/json:
             schema:
               type: object
-              required: [message]
+              required: [message, userEmail]
               properties:
                 message:
                   type: string
                   description: Natural language message or question
                   example: "Analyze https://github.com/spring-projects/spring-boot"
-                sessionId:
+                userEmail:
                   type: string
-                  description: Session ID for conversation context (auto-generated if not provided)
-                  example: "chat_session_12345"
+                  format: email
+                  description: User's email address for session management
+                  example: "user@example.com"
       responses:
         "200":
           description: Chat response
@@ -667,6 +783,171 @@ paths:
 
 components:
   schemas:
+    # User Session Management Schemas
+    SessionStartRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+          description: User's email address
+          example: "user@example.com"
+
+    SessionStartResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        user:
+          type: object
+          properties:
+            email:
+              type: string
+              format: email
+            isNew:
+              type: boolean
+              description: Whether this is a new user
+            lastVisit:
+              type: string
+              format: date-time
+        session:
+          type: object
+          properties:
+            id:
+              type: string
+              description: MongoDB session ID
+            currentRepository:
+              type: string
+              nullable: true
+              description: Currently active repository URL
+            lastActivity:
+              type: string
+              format: date-time
+        repositories:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserRepositoryInfo'
+          description: User's analyzed repositories
+
+    ContinueSessionRequest:
+      type: object
+      required: [email, repositoryUrl]
+      properties:
+        email:
+          type: string
+          format: email
+          description: User's email address
+          example: "user@example.com"
+        repositoryUrl:
+          type: string
+          format: uri
+          description: Repository URL to continue with
+          example: "https://github.com/spring-projects/spring-boot"
+
+    ContinueSessionResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "Session continued with repository: https://github.com/spring-projects/spring-boot"
+        repositoryUrl:
+          type: string
+          format: uri
+        repositoryId:
+          type: string
+          description: Internal repository identifier
+
+    UserRepositoriesResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        email:
+          type: string
+          format: email
+        repositories:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserRepositoryInfo'
+
+    UserSessionResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        hasSession:
+          type: boolean
+          description: Whether user has an active session
+        session:
+          type: object
+          nullable: true
+          properties:
+            id:
+              type: string
+            currentRepository:
+              type: string
+              nullable: true
+            currentRepositoryId:
+              type: string
+              nullable: true
+            lastActivity:
+              type: string
+              format: date-time
+            exchangeCount:
+              type: integer
+              description: Number of conversation exchanges
+
+    UserRepositoryInfo:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+          description: Repository URL
+        name:
+          type: string
+          description: Repository name
+        owner:
+          type: string
+          description: Repository owner
+        status:
+          type: string
+          enum: [CLONED, ANALYZING, COMPLETED, FAILED]
+          description: Repository analysis status
+        analyzedAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the repository was analyzed
+        createdAt:
+          type: string
+          format: date-time
+          description: When the repository was first added
+        fileCount:
+          type: integer
+          nullable: true
+          description: Number of files analyzed
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: string
+          description: Error type
+        message:
+          type: string
+          description: Error message
+
     ChatRequest:
       type: object
       required: [message]
@@ -745,6 +1026,8 @@ tags:
     description: Operations for analyzing and processing code
   - name: Query & Search
     description: Operations for searching and querying analyzed code
+  - name: User Sessions
+    description: Email-based user session management and persistence
   - name: Chat Agent
     description: Natural language interface for code analysis
   - name: Testing

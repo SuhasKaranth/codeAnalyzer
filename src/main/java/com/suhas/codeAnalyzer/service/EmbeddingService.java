@@ -228,6 +228,14 @@ public class EmbeddingService {
             });
         }
 
+        // Log repository metadata for debugging
+        if (metadata.containsKey("repositoryUrl")) {
+            logger.debug("✅ Chunk {} includes repository metadata: {}", 
+                    chunk.getId(), metadata.get("repositoryUrl"));
+        } else {
+            logger.debug("❌ Chunk {} missing repository metadata", chunk.getId());
+        }
+
         return metadata;
     }
 

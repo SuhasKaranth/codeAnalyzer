@@ -263,6 +263,15 @@ public class ChatMethodExecutor {
             //searchRequest.put("maxResults", 10);
             searchRequest.put("includeCode", true);
             searchRequest.put("includeExplanation", true);  // Let LLM explain what it found
+            
+            // Add repository filtering if current repository is specified
+            String currentRepositoryUrl = (String) params.get("currentRepositoryUrl");
+            if (currentRepositoryUrl != null && !currentRepositoryUrl.trim().isEmpty()) {
+                log.info("🎯 Filtering endpoint search to repository: {}", currentRepositoryUrl);
+                Map<String, Object> filters = new HashMap<>();
+                filters.put("repositoryUrl", currentRepositoryUrl);
+                searchRequest.put("filters", filters);
+            }
 
             Object searchResults = restTemplate.postForObject(
                     getBaseUrl() + "/api/query/search",
@@ -450,6 +459,15 @@ public class ChatMethodExecutor {
             searchRequest.put("maxResults", 8);
             searchRequest.put("includeCode", true);
             searchRequest.put("includeExplanation", true);
+            
+            // Add repository filtering if current repository is specified
+            String currentRepositoryUrl = (String) params.get("currentRepositoryUrl");
+            if (currentRepositoryUrl != null && !currentRepositoryUrl.trim().isEmpty()) {
+                log.info("🎯 Filtering component search to repository: {}", currentRepositoryUrl);
+                Map<String, Object> filters = new HashMap<>();
+                filters.put("repositoryUrl", currentRepositoryUrl);
+                searchRequest.put("filters", filters);
+            }
 
             Object searchResults = restTemplate.postForObject(
                     getBaseUrl() + "/api/query/search",
@@ -514,12 +532,24 @@ public class ChatMethodExecutor {
             }
 
             log.info("🔎 Searching code for: {}", query);
+            log.debug("📋 Search params received: {}", params);
 
             Map<String, Object> searchRequest = new HashMap<>();
             searchRequest.put("query", query);
             searchRequest.put("maxResults", 5);
             searchRequest.put("includeCode", true);
             searchRequest.put("includeExplanation", true);
+            
+            // Add repository filtering if current repository is specified
+            String currentRepositoryUrl = (String) params.get("currentRepositoryUrl");
+            if (currentRepositoryUrl != null && !currentRepositoryUrl.trim().isEmpty()) {
+                log.info("🎯 Filtering search results to repository: {}", currentRepositoryUrl);
+                Map<String, Object> filters = new HashMap<>();
+                filters.put("repositoryUrl", currentRepositoryUrl);
+                searchRequest.put("filters", filters);
+            } else {
+                log.warn("⚠️ No repository filter applied - may return results from multiple repositories");
+            }
 
             Object searchResults = restTemplate.postForObject(
                     getBaseUrl() + "/api/query/search",
@@ -633,6 +663,15 @@ public class ChatMethodExecutor {
             serviceSearch.put("query", "Resource JAX-RS @Path @GET @POST @PUT @DELETE");
             serviceSearch.put("maxResults", 20);
             serviceSearch.put("includeCode", true);
+            
+            // Add repository filtering if current repository is specified
+            String currentRepositoryUrl = (String) params.get("currentRepositoryUrl");
+            if (currentRepositoryUrl != null && !currentRepositoryUrl.trim().isEmpty()) {
+                log.info("🎯 Filtering service search to repository: {}", currentRepositoryUrl);
+                Map<String, Object> filters = new HashMap<>();
+                filters.put("repositoryUrl", currentRepositoryUrl);
+                serviceSearch.put("filters", filters);
+            }
 
             Object serviceResults = restTemplate.postForObject(
                     getBaseUrl() + "/api/query/search",
@@ -645,6 +684,14 @@ public class ChatMethodExecutor {
             configSearch.put("query", "JerseyConfig ResourceConfig @ApplicationPath");
             //configSearch.put("maxResults", 10);
             configSearch.put("includeCode", true);
+            
+            // Add repository filtering for config search too
+            if (currentRepositoryUrl != null && !currentRepositoryUrl.trim().isEmpty()) {
+                log.info("🎯 Filtering config search to repository: {}", currentRepositoryUrl);
+                Map<String, Object> configFilters = new HashMap<>();
+                configFilters.put("repositoryUrl", currentRepositoryUrl);
+                configSearch.put("filters", configFilters);
+            }
 
             Object configResults = restTemplate.postForObject(
                     getBaseUrl() + "/api/query/search",

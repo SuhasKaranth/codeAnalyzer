@@ -114,3 +114,11 @@ workspace/
 chroma_data/
 embeddings/
 repositories/
+
+# Claude Code settings
+.claude/
+*.local.json
+
+# Development scripts and temp docs
+*cleanup*.sh
+FRONTEND_INTEGRATION_GUIDE.md

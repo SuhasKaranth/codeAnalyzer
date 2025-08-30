@@ -6,10 +6,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Service
@@ -95,14 +92,25 @@ public class ChatAgentService {
         // Add current repository URL to actions that need it
         if (needsRepositoryUrl(action.getActionName()) && context.getCurrentRepository() != null) {
             enhancedParams.put("currentRepositoryUrl", context.getCurrentRepository());
+            log.info("🎯 Enhanced action '{}' with repository URL: {}", 
+                    action.getActionName(), context.getCurrentRepository());
+        } else if (needsRepositoryUrl(action.getActionName())) {
+            log.warn("⚠️ Action '{}' needs repository URL but context has none. Current repo: {}", 
+                    action.getActionName(), context.getCurrentRepository());
         }
 
         return new LLMAction(action.getActionName(), enhancedParams);
     }
 
     private boolean needsRepositoryUrl(String actionName) {
-        List<String> actionsNeedingUrl = new ArrayList<>();
-        actionsNeedingUrl.add("LIST_FILES");
+        List<String> actionsNeedingUrl = Arrays.asList(
+                "LIST_FILES",
+                "SEARCH_CODE",
+                "FIND_ENDPOINTS", 
+                "FIND_COMPONENTS",
+                "ANALYZE_PROJECT_STRUCTURE",
+                "EXPLAIN_CLASS"
+        );
         return actionsNeedingUrl.contains(actionName);
     }
 

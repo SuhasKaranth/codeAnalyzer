@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 @Service
 public class CodeAnalysisService {
@@ -160,7 +161,10 @@ public class CodeAnalysisService {
                 logger.info("Phase 3: Generating embeddings for {} chunks from repository: {}", codeChunks.size(), repositoryUrl);
                 progress.setStatus(AnalysisStatus.GENERATING_EMBEDDINGS);
                 progress.setMessage("Generating embeddings");
-                List<EmbeddingService.CodeEmbedding> embeddings = embeddingService.generateEmbeddings(codeChunks).join();
+                
+                // Add repository information to chunks before generating embeddings
+                List<CodeParserService.CodeChunk> enhancedChunks = enhanceChunksWithRepositoryInfo(codeChunks, repositoryUrl);
+                List<EmbeddingService.CodeEmbedding> embeddings = embeddingService.generateEmbeddings(enhancedChunks).join();
 
                 progress.setProcessedChunks(embeddings.size());
                 progress.setMessage(String.format("Generated %d embeddings", embeddings.size()));
@@ -265,7 +269,10 @@ public class CodeAnalysisService {
 
                 // Generate and store embeddings
                 logger.info("Generating embeddings for {} chunks from specific files", codeChunks.size());
-                List<EmbeddingService.CodeEmbedding> embeddings = embeddingService.generateEmbeddings(codeChunks).join();
+                
+                // Add repository information to chunks before generating embeddings
+                List<CodeParserService.CodeChunk> enhancedChunks = enhanceChunksWithRepositoryInfo(codeChunks, repositoryUrl);
+                List<EmbeddingService.CodeEmbedding> embeddings = embeddingService.generateEmbeddings(enhancedChunks).join();
                 logger.info("Generated {} embeddings, storing in vector database", embeddings.size());
                 vectorStoreService.storeEmbeddings(embeddings).join();
                 logger.info("Specific file analysis embedding storage completed");
@@ -374,6 +381,41 @@ public class CodeAnalysisService {
         return counts;
     }
 
+    /**
+     * Enhance code chunks with repository information for better filtering
+     */
+    private List<CodeParserService.CodeChunk> enhanceChunksWithRepositoryInfo(
+            List<CodeParserService.CodeChunk> chunks, String repositoryUrl) {
+        logger.debug("Enhancing {} chunks with repository information: {}", chunks.size(), repositoryUrl);
+        
+        String repositoryId = generateRepositoryId(repositoryUrl);
+        return chunks.stream()
+                .map(chunk -> {
+                    // Create a copy of the chunk with enhanced metadata
+                    Map<String, Object> enhancedMetadata = new HashMap<>(chunk.getMetadata());
+                    enhancedMetadata.put("repositoryUrl", repositoryUrl);
+                    enhancedMetadata.put("repositoryId", repositoryId);
+                    
+                    // Create new chunk with enhanced metadata using the correct constructor
+                    CodeParserService.CodeChunk enhancedChunk = new CodeParserService.CodeChunk(
+                            chunk.getId(),
+                            chunk.getContent(),
+                            chunk.getType(),
+                            chunk.getClassName(),
+                            chunk.getFilePath(),
+                            enhancedMetadata
+                    );
+                    
+                    // Set the additional fields
+                    enhancedChunk.setPackageName(chunk.getPackageName());
+                    enhancedChunk.setMethodName(chunk.getMethodName());
+                    enhancedChunk.setAnnotations(chunk.getAnnotations());
+                    
+                    return enhancedChunk;
+                })
+                .collect(Collectors.toList());
+    }
+    
     private String generateRepositoryId(String repositoryUrl) {
         return String.valueOf(repositoryUrl.hashCode());
     }
