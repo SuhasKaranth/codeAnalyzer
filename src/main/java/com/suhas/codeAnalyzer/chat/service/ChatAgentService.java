@@ -110,6 +110,14 @@ public class ChatAgentService {
         return sessions.get(sessionId);
     }
 
+    // Debug method to set repository context manually
+    public void setRepositoryContext(String sessionId, String repositoryUrl) {
+        ConversationContext context = getOrCreateContext(sessionId);
+        context.setCurrentRepository(repositoryUrl);
+        context.setCurrentRepositoryId(generateRepositoryId(repositoryUrl));
+        log.info("Manually set repository context: {} for session: {}", repositoryUrl, sessionId);
+    }
+
     private ConversationContext getOrCreateContext(String sessionId) {
         return sessions.computeIfAbsent(sessionId, ConversationContext::new);
     }
