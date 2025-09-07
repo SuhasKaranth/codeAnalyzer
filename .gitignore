@@ -111,6 +111,10 @@ docker-compose.override.yml
 
 # Application specific directories
 workspace/
+workspace-dev/
 chroma_data/
 embeddings/
 repositories/
+
+# Claude Code settings (contains sensitive info)
+.claude/

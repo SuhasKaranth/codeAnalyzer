@@ -379,51 +379,76 @@ public class CodeParserService {
     }
 
     /**
-     * Build code for a method group with context
+     * Build code for a method group with context - optimized to prioritize method signatures
      */
     private String buildGroupCode(ClassOrInterfaceDeclaration cls, MethodGroup group,
                                   String packageName, List<String> imports) {
         StringBuilder code = new StringBuilder();
 
-        // Package for context
-        if (!packageName.isEmpty()) {
-            code.append("package ").append(packageName).append(";\n\n");
+        // For REST endpoints, prioritize method signatures over imports
+        if ("REST_ENDPOINTS".equals(group.getType())) {
+            // Minimal context for REST endpoints - no imports to avoid noise
+            code.append("// REST Controller: ").append(cls.getNameAsString()).append("\n");
+            code.append("// Package: ").append(packageName).append("\n\n");
+            
+            // Include class annotations (critical for REST controllers)
+            cls.getAnnotations().stream()
+                    .filter(this::isImportantAnnotation)
+                    .forEach(ann -> code.append(ann).append("\n"));
+            
+            // Simplified class declaration
+            code.append("public class ").append(cls.getNameAsString()).append(" {\n\n");
+            
+            // Methods only - no fields to maximize method signature visibility  
+            group.getMethods().forEach(method -> {
+                code.append("    ").append(method).append("\n\n");
+            });
+            
+            code.append("}\n");
+            
+        } else {
+            // Standard context for other groups (business logic, CRUD, etc.)
+            // Package for context  
+            if (!packageName.isEmpty()) {
+                code.append("package ").append(packageName).append(";\n\n");
+            }
+            
+            // Include only critical imports (reduce noise)
+            imports.stream()
+                    .filter(this::isCriticalImport)
+                    .limit(3) // Limit to top 3 most important imports
+                    .forEach(imp -> code.append("import ").append(imp).append(";\n"));
+            
+            if (!imports.isEmpty()) {
+                code.append("\n");
+            }
+            
+            // Class header for context
+            code.append("// Class: ").append(cls.getNameAsString()).append("\n");
+            code.append("// Group: ").append(group.getType()).append("\n\n");
+
+            // Include important class annotations
+            cls.getAnnotations().stream()
+                    .filter(this::isImportantAnnotation)
+                    .forEach(ann -> code.append(ann).append("\n"));
+
+            // Class declaration (simplified)
+            code.append("public class ").append(cls.getNameAsString()).append(" {\n\n");
+
+            // Relevant fields for this group
+            cls.getFields().stream()
+                    .filter(field -> isRelevantForGroup(field, group))
+                    .forEach(field -> code.append("    ").append(field).append("\n"));
+
+            if (!cls.getFields().isEmpty()) code.append("\n");
+
+            // Methods in this group
+            group.getMethods().forEach(method -> {
+                code.append("    ").append(method).append("\n\n");
+            });
+
+            code.append("}\n");
         }
-
-        // Important imports
-        imports.stream()
-                .filter(this::isImportantImport)
-                .forEach(imp -> code.append("import ").append(imp).append(";\n"));
-
-        if (!imports.isEmpty()) {
-            code.append("\n");
-        }
-
-        // Class header for context
-        code.append("// Class: ").append(cls.getNameAsString()).append("\n");
-        code.append("// Group: ").append(group.getType()).append("\n\n");
-
-        // Include important class annotations
-        cls.getAnnotations().stream()
-                .filter(this::isImportantAnnotation)
-                .forEach(ann -> code.append(ann).append("\n"));
-
-        // Class declaration (simplified)
-        code.append("public class ").append(cls.getNameAsString()).append(" {\n\n");
-
-        // Relevant fields for this group
-        cls.getFields().stream()
-                .filter(field -> isRelevantForGroup(field, group))
-                .forEach(field -> code.append("    ").append(field).append("\n"));
-
-        if (!cls.getFields().isEmpty()) code.append("\n");
-
-        // Methods in this group
-        group.getMethods().forEach(method -> {
-            code.append("    ").append(method).append("\n\n");
-        });
-
-        code.append("}\n");
 
         return code.toString();
     }
@@ -552,6 +577,16 @@ public class CodeParserService {
                 importName.contains("javax.ws.rs") ||
                 importName.contains("javax.validation") ||
                 importName.contains("jakarta.validation");
+    }
+
+    /**
+     * More restrictive filter for critical imports only (used to reduce noise)
+     */
+    private boolean isCriticalImport(String importName) {
+        return importName.contains("springframework.web") ||
+                importName.contains("springframework.boot") ||
+                importName.contains("javax.persistence.Entity") ||
+                importName.contains("jakarta.persistence.Entity");
     }
 
     private boolean isImportantAnnotation(AnnotationExpr ann) {

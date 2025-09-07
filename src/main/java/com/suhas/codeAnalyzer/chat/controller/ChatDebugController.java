@@ -11,7 +11,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 @RestController
-@RequestMapping("/api/chat/debug")
+@RequestMapping("/api/v1/chat/debug")
 public class ChatDebugController {
 
     @Autowired

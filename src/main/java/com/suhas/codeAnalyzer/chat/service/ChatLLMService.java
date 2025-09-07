@@ -59,6 +59,14 @@ public class ChatLLMService {
             "https?://github\\.com/[\\w.-]+/[\\w.-]+", Pattern.CASE_INSENSITIVE
     );
 
+    // Pattern for repository URLs (GitHub, GitLab, Bitbucket, etc.)
+    private static final Pattern REPOSITORY_URL_PATTERN = Pattern.compile(
+            "(?i)(?:https?://|git@|ssh://)?(?:www\\.)?" +
+            "(?:github\\.com|bitbucket\\.org|gitlab\\.com|gitea\\.com|codeberg\\.org|" +
+            "sourceforge\\.net|launchpad\\.net|gitee\\.com)" +
+            "[/:\\w\\.-]*"
+    );
+
     @PostConstruct
     public void init() {
         this.restTemplate = new RestTemplate();
@@ -263,26 +271,98 @@ public class ChatLLMService {
 
     private String getIntentAnalysisSystemPrompt() {
         return """
-            You are an intent classifier for a code analysis assistant.
-            Analyze the user's message and determine their primary intent.
-            
-            Available actions:
-            - ANALYZE_REPO: User wants to clone/analyze a NEW GitHub repository (contains GitHub URL and words like "analyze", "clone")
-            - GET_STATUS: User wants to check analysis progress or status (contains "status", "progress", "complete", "finished")
-            - FIND_ENDPOINTS: User wants to find REST API endpoints (contains "endpoint", "API", "REST", "controller" but NOT asking about specific file)
-            - FIND_COMPONENTS: User wants to find Spring components/services (contains "component", "service", "bean" but NOT asking about specific file)
-            - SEARCH_CODE: User wants to search for specific code patterns (contains "search", "find", "look for" with search terms)
-            - LIST_FILES: User wants to see repository file structure (contains "files", "structure", "list", "directory")
-            - GET_HEALTH: User wants to check system health (contains "health", "check", "working")
-            - QUERY_RESPONSE: User asks detailed questions about already analyzed code, specific files, classes, methods, or architecture (contains "explain", "what does", "how does", "describe", "detail", file paths, class names)
-            - GREETING: User is greeting or asking what you can do (contains "hello", "hi", "help", "what can you do")
-            
-            Key distinction: 
-            - Use ANALYZE_REPO only when user wants to analyze a NEW repository (with GitHub URL)
-            - Use QUERY_RESPONSE when user asks about existing code, specific files, classes, or wants detailed explanations
-            
-            Respond with ONLY the action name (e.g., "QUERY_RESPONSE") or "UNKNOWN" if unclear.
-            Do not include explanations or additional text.
+            You are an intelligent intent classifier for a code analysis system. 
+            Analyze the user message and respond with EXACTLY ONE action name.
+
+            === CRITICAL DISTINCTION ===
+            ANALYZE_REPO = User wants to START/PERFORM analysis (action to execute)
+            QUERY_RESPONSE = User wants to ASK ABOUT existing analysis (question about results)
+
+            ACTIONS AVAILABLE:
+            • ANALYZE_REPO - Clone and analyze a new repository
+            • QUERY_RESPONSE - Answer questions about already-analyzed code  
+            • FIND_ENDPOINTS - Find REST API endpoints/controllers
+            • FIND_COMPONENTS - Find Spring components/services/beans
+            • SEARCH_CODE - Search for specific code patterns
+            • LIST_FILES - Show repository file structure
+            • GET_STATUS - Check analysis progress/status  
+            • GET_HEALTH - Check system health
+            • GREETING - User greeting or asking for help
+
+            === INTENT REASONING PATTERNS ===
+
+            🎯 ACTION INTENT (wants system to DO something):
+            Indicators: "analyze", "process", "clone", "start", "run analysis on"
+            + GitHub URL = ANALYZE_REPO
+            Example thoughts:
+            - "analyze [URL]" = user wants me to perform analysis → ANALYZE_REPO
+            - "process this repo" = user wants me to start processing → ANALYZE_REPO
+            - "analyze [URL] again" = user wants fresh analysis → ANALYZE_REPO
+
+            🔍 QUESTION INTENT (wants information ABOUT something):  
+            Indicators: "explain", "what does", "how does", "tell me about", "describe"
+            + Existing repository context = QUERY_RESPONSE  
+            Example thoughts:
+            - "explain this class" = user wants explanation → QUERY_RESPONSE
+            - "what does this code do" = user asking for information → QUERY_RESPONSE
+            - "analyze what this function does" = asking for explanation → QUERY_RESPONSE
+
+            🧭 DISCOVERY INTENT (wants to find/list things):
+            Indicators: "find", "show", "list", "search for"
+            + Specific targets = Specific actions
+            Example thoughts:
+            - "find endpoints" = wants to discover APIs → FIND_ENDPOINTS
+            - "search for validation" = wants to find patterns → SEARCH_CODE
+
+            === CONTEXT INTERPRETATION ===
+
+            When repository context is available:
+            ✅ GOOD: "The repository is analyzed, user can ask questions about it"
+            ❌ BAD: "Since repository exists, any mention of 'analyze' must be a question"
+
+            CORRECT REASONING:
+            - Repository context enables QUERY_RESPONSE capability
+            - Repository context does NOT prevent ANALYZE_REPO actions
+            - GitHub URL + action words = user wants to perform analysis
+            - Question words + existing context = user wants information
+
+            === EXAMPLES WITH REASONING ===
+
+            "Analyze https://github.com/user/repo"
+            → Reasoning: GitHub URL + "analyze" = action intent
+            → Answer: ANALYZE_REPO
+
+            "What does the UserController class do?" 
+            → Reasoning: "What does" = question intent + existing repo
+            → Answer: QUERY_RESPONSE
+
+            "Explain how this Spring Boot application works"
+            → Reasoning: "Explain" = question intent + existing repo  
+            → Answer: QUERY_RESPONSE
+
+            "Process https://github.com/user/newrepo"  
+            → Reasoning: GitHub URL + "process" = action intent
+            → Answer: ANALYZE_REPO
+
+            "Analyze what the main method does"
+            → Reasoning: "what...does" = question intent (not action intent)
+            → Answer: QUERY_RESPONSE
+
+            "Find all REST endpoints in this codebase"
+            → Reasoning: "Find" + "endpoints" = discovery intent
+            → Answer: FIND_ENDPOINTS
+
+            === DECISION RULES ===
+            1. GitHub URL + Action Words (analyze/process/clone) → ANALYZE_REPO  
+            2. Question Words (what/how/explain) + Repository Available → QUERY_RESPONSE
+            3. Discovery Words (find/show/list) + Targets → Specific Discovery Actions
+            4. Status/Health Words → GET_STATUS/GET_HEALTH  
+            5. Greetings/Help → GREETING
+            6. If unsure and repository available → QUERY_RESPONSE
+            7. If unsure and no repository → GREETING
+
+            Remember: Context enables capabilities, it doesn't restrict user intent.
+            Focus on what the user WANTS TO HAPPEN, not just what's currently available.
             """;
     }
 
@@ -290,21 +370,10 @@ public class ChatLLMService {
         StringBuilder prompt = new StringBuilder();
         prompt.append("User message: \"").append(userMessage).append("\"");
         
-        if (context.getCurrentRepository() != null) {
-            prompt.append("\nContext: Repository '").append(context.getCurrentRepository()).append("' is currently analyzed and available for queries");
-            prompt.append("\nNote: User can ask detailed questions about this analyzed repository");
-        } else {
-            prompt.append("\nContext: No repository is currently analyzed");
-            prompt.append("\nNote: User must analyze a repository first before asking about specific files or code");
-        }
-        
-        // Additional context clues
-        if (userMessage.toLowerCase().contains("explain") || userMessage.toLowerCase().contains("what does")) {
-            prompt.append("\nNote: User is asking for explanations, likely wants QUERY_RESPONSE");
-        }
-        
-        if (userMessage.contains("/") && (userMessage.contains(".java") || userMessage.contains(".kt") || userMessage.contains(".groovy"))) {
-            prompt.append("\nNote: User mentions specific file path, likely wants QUERY_RESPONSE");
+        // 🎯 CONDITIONAL CONTEXT: Only add repository context if message doesn't contain URL
+        // This prevents SLM bias when user provides explicit repository URL for new analysis
+        if (!containsRepositoryUrl(userMessage) && context.getCurrentRepository() != null) {
+            prompt.append("\nCurrent repository: ").append(context.getCurrentRepository());
         }
         
         return prompt.toString();
@@ -720,6 +789,21 @@ public class ChatLLMService {
     private String extractGitHubUrl(String text) {
         java.util.regex.Matcher matcher = GITHUB_URL_PATTERN.matcher(text);
         return matcher.find() ? matcher.group() : null;
+    }
+
+    /**
+     * Checks if the user message contains any repository URL patterns
+     * Used to determine whether to add session context to SLM prompts
+     */
+    private boolean containsRepositoryUrl(String userMessage) {
+        // Check for repository URL patterns (GitHub, GitLab, Bitbucket, etc.)
+        if (REPOSITORY_URL_PATTERN.matcher(userMessage).find()) {
+            return true;
+        }
+        
+        // Check for basic HTTP/HTTPS patterns as fallback
+        String lowerMessage = userMessage.toLowerCase();
+        return lowerMessage.contains("http://") || lowerMessage.contains("https://");
     }
 
     private String extractSearchQuery(String text) {

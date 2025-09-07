@@ -117,6 +117,42 @@ public class ChatAgentService {
         context.setCurrentRepositoryId(generateRepositoryId(repositoryUrl));
         log.info("Manually set repository context: {} for session: {}", repositoryUrl, sessionId);
     }
+    
+    /**
+     * Notify all active chat sessions that a repository has been analyzed
+     * This enables seamless integration between direct analysis API calls and chat functionality
+     * @param repositoryUrl The URL of the repository that was analyzed
+     */
+    public void notifyRepositoryAnalyzed(String repositoryUrl) {
+        if (repositoryUrl == null || repositoryUrl.trim().isEmpty()) {
+            log.warn("Cannot notify repository analyzed - repository URL is null or empty");
+            return;
+        }
+        
+        String repoId = generateRepositoryId(repositoryUrl);
+        int updatedSessions = 0;
+        
+        // Update all active chat sessions with the newly analyzed repository
+        for (Map.Entry<String, ConversationContext> entry : sessions.entrySet()) {
+            String sessionId = entry.getKey();
+            ConversationContext context = entry.getValue();
+            
+            // Update the repository context
+            context.setCurrentRepository(repositoryUrl);
+            context.setCurrentRepositoryId(repoId);
+            updatedSessions++;
+            
+            log.debug("Updated session {} with repository context: {}", sessionId, repositoryUrl);
+        }
+        
+        log.info("Repository analysis notification: Updated {} active chat sessions with repository: {}", 
+                updatedSessions, repositoryUrl);
+        
+        // If no sessions exist yet, this is fine - future sessions will be created as needed
+        if (updatedSessions == 0) {
+            log.debug("No active chat sessions to update - repository context will be available for new sessions");
+        }
+    }
 
     private ConversationContext getOrCreateContext(String sessionId) {
         return sessions.computeIfAbsent(sessionId, ConversationContext::new);

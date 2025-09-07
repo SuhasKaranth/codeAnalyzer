@@ -25,6 +25,7 @@ dependencies {
 
 	// Data & Persistence (already present)
 	runtimeOnly 'com.h2database:h2'
+	implementation 'org.springframework.boot:spring-boot-starter-data-mongodb'
 
 	// Code Analysis Dependencies (NEW)
 	implementation 'com.github.javaparser:javaparser-core:3.25.4'

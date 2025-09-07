@@ -10,7 +10,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 @RestController
-@RequestMapping("/api/chat/test")
+@RequestMapping("/api/v1/chat/test")
 public class ChatTestController {
 
     @Autowired(required = false)

@@ -1,6 +1,7 @@
 package com.suhas.codeAnalyzer.controller;
 
 import com.suhas.codeAnalyzer.service.CodeAnalysisService;
+import com.suhas.codeAnalyzer.chat.service.ChatAgentService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -20,6 +21,9 @@ public class AnalysisController {
 
     @Autowired
     private CodeAnalysisService codeAnalysisService;
+    
+    @Autowired
+    private ChatAgentService chatAgentService;
 
     /**
      * Start complete analysis of a repository
@@ -46,6 +50,14 @@ public class AnalysisController {
                 } else {
                     logger.info("Analysis completed for {}: {} chunks processed",
                             url, result.getTotalChunks());
+                    
+                    // Notify chat service about the analyzed repository for seamless integration
+                    try {
+                        chatAgentService.notifyRepositoryAnalyzed(url);
+                        logger.debug("Notified chat service about analyzed repository: {}", url);
+                    } catch (Exception e) {
+                        logger.warn("Failed to notify chat service about repository analysis: {}", e.getMessage());
+                    }
                 }
             });
 
@@ -136,6 +148,14 @@ public class AnalysisController {
 
             if (!result.getErrors().isEmpty()) {
                 response.put("errors", result.getErrors());
+            }
+
+            // Notify chat service about the analyzed repository for seamless integration
+            try {
+                chatAgentService.notifyRepositoryAnalyzed(url);
+                logger.debug("Notified chat service about analyzed repository (specific files): {}", url);
+            } catch (Exception e) {
+                logger.warn("Failed to notify chat service about repository analysis: {}", e.getMessage());
             }
 
             return ResponseEntity.ok(response);

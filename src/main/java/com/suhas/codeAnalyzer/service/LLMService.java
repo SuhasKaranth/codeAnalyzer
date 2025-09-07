@@ -1,29 +1,73 @@
 package com.suhas.codeAnalyzer.service;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.http.*;
+import org.springframework.web.client.RestTemplate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.util.retry.Retry;
 
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
+import java.util.*;
+import jakarta.annotation.PostConstruct;
+import com.suhas.codeAnalyzer.service.llm.*;
 
 @Service
 public class LLMService {
 
     private static final Logger logger = LoggerFactory.getLogger(LLMService.class);
 
-    @Value("${external.ollama.base-url}")
+    @Value("${external.ollama.base-url:http://localhost:11434}")
     private String ollamaBaseUrl;
 
-    @Value("${external.ollama.llm-model}")
+    @Value("${external.ollama.llm-model:codellama:7b-instruct}")
     private String llmModel;
 
     @Value("${external.ollama.timeout:120s}")  // Increased from 60s to 120s
     private Duration timeout;
+
+    // Groq API Configuration
+    @Value("${llm.provider:ollama}")
+    private String llmProvider;
+
+    @Value("${groq.api.key:}")
+    private String groqApiKey;
+
+    @Value("${groq.api.base-url:https://api.groq.com/openai/v1}")
+    private String groqBaseUrl;
+
+    @Value("${groq.api.model:llama-3.1-8b-instant}")
+    private String groqModel;
+
+    @Value("${groq.api.temperature:0.1}")
+    private double groqTemperature;
+
+    @Value("${groq.api.max-tokens:2048}")
+    private int groqMaxTokens;
+
+    // Groq system prompts from properties
+    @Value("${groq.system-prompts.default:You are an expert Java and Spring Boot developer assistant.}")
+    private String defaultSystemPrompt;
+
+    @Value("${groq.system-prompts.code-analysis:You are an expert Java and Spring Boot developer. Analyze the code and answer questions.}")
+    private String codeAnalysisSystemPrompt;
+
+    @Value("${groq.system-prompts.code-explanation:Explain this Java/Spring Boot code clearly and concisely.}")
+    private String codeExplanationSystemPrompt;
+
+    @Value("${groq.system-prompts.api-analysis:Analyze this Spring Boot code and extract REST API endpoints.}")
+    private String apiAnalysisSystemPrompt;
+
+    @Value("${groq.system-prompts.business-logic:Analyze the business logic flow in this Spring Boot application.}")
+    private String businessLogicSystemPrompt;
+
+    @Autowired
+    private LLMProviderFactory providerFactory;
 
     private final WebClient webClient;
 
@@ -31,6 +75,16 @@ public class LLMService {
         this.webClient = WebClient.builder()
                 .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(10 * 1024 * 1024)) // 10MB
                 .build();
+    }
+
+    @PostConstruct
+    public void logConfiguration() {
+        logger.info("=== LLM Service Configuration ===");
+        logger.info("Using Provider Factory for intelligent routing");
+        logger.info("Legacy LLM Provider: {}", llmProvider);
+        logger.info("Groq API Key configured: {}", !groqApiKey.isEmpty());
+        logger.info("Ollama Base URL: {}", ollamaBaseUrl);
+        logger.info("===================================");
     }
 
     // Request/Response DTOs for Ollama API
@@ -116,11 +170,21 @@ public class LLMService {
         logger.debug("Generating LLM response for query: {}", userQuery);
         logger.debug("Context length: {} characters", codeContext.length());
 
-        return generateResponse(enhancedPrompt)
-                .thenApply(response -> {
-                    logger.debug("Generated response length: {} characters", response.length());
-                    return response;
-                });
+        // Query operations use configurable provider (default: Groq)
+        LLMProvider provider = providerFactory.getProvider(LLMUseCase.QUERY);
+        logger.debug("Using {} provider for code query response (query pipeline)", provider.getProviderName());
+        
+        LLMContext context = LLMContext.builder(LLMUseCase.QUERY)
+                .metadata("query", userQuery)
+                .metadata("contextLength", codeContext.length())
+                .build();
+        
+        CompletableFuture<String> response = provider.generateResponse(enhancedPrompt, codeAnalysisSystemPrompt, context);
+
+        return response.thenApply(result -> {
+            logger.debug("Generated response length: {} characters", result.length());
+            return result;
+        });
     }
 
     /**
@@ -131,7 +195,14 @@ public class LLMService {
 
         logger.debug("Generating code explanation for snippet length: {}", codeSnippet.length());
 
-        return generateResponse(prompt);
+        LLMProvider provider = providerFactory.getProvider(LLMUseCase.CODE_EXPLANATION);
+        logger.debug("Using {} provider for code explanation", provider.getProviderName());
+        
+        LLMContext context = LLMContext.builder(LLMUseCase.CODE_EXPLANATION)
+                .metadata("codeLength", codeSnippet.length())
+                .build();
+                
+        return provider.generateResponse(prompt, codeExplanationSystemPrompt, context);
     }
 
     /**
@@ -142,7 +213,14 @@ public class LLMService {
 
         logger.debug("Analyzing API endpoints in context");
 
-        return generateResponse(prompt);
+        LLMProvider provider = providerFactory.getProvider(LLMUseCase.API_ANALYSIS);
+        logger.debug("Using {} provider for API endpoint analysis", provider.getProviderName());
+        
+        LLMContext context = LLMContext.builder(LLMUseCase.API_ANALYSIS)
+                .metadata("contextLength", codeContext.length())
+                .build();
+                
+        return provider.generateResponse(prompt, apiAnalysisSystemPrompt, context);
     }
 
     /**
@@ -153,13 +231,88 @@ public class LLMService {
 
         logger.debug("Analyzing business logic flow");
 
-        return generateResponse(prompt);
+        LLMProvider provider = providerFactory.getProvider(LLMUseCase.BUSINESS_LOGIC);
+        logger.debug("Using {} provider for business logic analysis", provider.getProviderName());
+        
+        LLMContext context = LLMContext.builder(LLMUseCase.BUSINESS_LOGIC)
+                .metadata("query", userQuery)
+                .metadata("contextLength", codeContext.length())
+                .build();
+                
+        return provider.generateResponse(prompt, businessLogicSystemPrompt, context);
     }
 
     /**
-     * Core method to generate response from Ollama
+     * Core method to generate response - uses Groq or Ollama based on configuration
      */
     private CompletableFuture<String> generateResponse(String prompt) {
+        if ("groq".equalsIgnoreCase(llmProvider) && !groqApiKey.isEmpty()) {
+            return generateResponseWithGroq(prompt);
+        } else {
+            return generateResponseWithOllama(prompt);
+        }
+    }
+
+    /**
+     * Generate response using Groq API
+     */
+    private CompletableFuture<String> generateResponseWithGroq(String prompt) {
+        return generateResponseWithGroq(prompt, defaultSystemPrompt);
+    }
+    
+    /**
+     * Generate response using Groq API with custom system prompt
+     */
+    private CompletableFuture<String> generateResponseWithGroq(String userPrompt, String systemPrompt) {
+        try {
+            RestTemplate restTemplate = new RestTemplate();
+            
+            // Create request body for Groq API (OpenAI format)
+            Map<String, Object> requestBody = new HashMap<>();
+            requestBody.put("model", groqModel);
+            requestBody.put("messages", Arrays.asList(
+                Map.of("role", "system", "content", systemPrompt),
+                Map.of("role", "user", "content", userPrompt)
+            ));
+            requestBody.put("temperature", groqTemperature);
+            requestBody.put("max_tokens", groqMaxTokens);
+
+            // Set headers
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            headers.set("Authorization", "Bearer " + groqApiKey);
+
+            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
+
+            // Call Groq API
+            ResponseEntity<Map> response = restTemplate.postForEntity(
+                groqBaseUrl + "/chat/completions", entity, Map.class);
+
+            // Extract response content
+            Map<String, Object> responseBody = response.getBody();
+            if (responseBody != null && responseBody.containsKey("choices")) {
+                List<Map<String, Object>> choices = (List<Map<String, Object>>) responseBody.get("choices");
+                if (!choices.isEmpty()) {
+                    Map<String, Object> message = (Map<String, Object>) choices.get(0).get("message");
+                    String content = (String) message.get("content");
+                    logger.debug("Groq API response received successfully");
+                    return CompletableFuture.completedFuture(content);
+                }
+            }
+            
+            logger.error("Invalid response structure from Groq API");
+            return CompletableFuture.completedFuture("Sorry, I received an invalid response. Please try again.");
+            
+        } catch (Exception e) {
+            logger.error("Failed to generate response with Groq API, falling back to Ollama: {}", e.getMessage());
+            return generateResponseWithOllama(userPrompt);
+        }
+    }
+
+    /**
+     * Generate response using Ollama (fallback)
+     */
+    private CompletableFuture<String> generateResponseWithOllama(String prompt) {
         GenerateRequest request = new GenerateRequest(llmModel, prompt);
 
         return webClient.post()
@@ -328,6 +481,7 @@ public class LLMService {
                 .onErrorReturn(false)
                 .toFuture();
     }
+
 
     /**
      * Get LLM model info
